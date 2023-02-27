@@ -17,26 +17,23 @@ logging.basicConfig(
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
 model = os.getenv("MODEL_NAME", "davinci")
 
-#initialise the prompt
+# initialise the prompt
 initialprompt = ""
 with open("prompts.txt") as promptfile:
-        initialprompt = promptfile.read()
+    initialprompt = promptfile.read()
 
 
-
-class Faebot (discord.Client):
-
-    def __init__(self,intents) -> None:
-        self.conversation: list [str] = []
+class Faebot(discord.Client):
+    def __init__(self, intents) -> None:
+        self.conversation: list[str] = []
         super().__init__(intents=intents)
-
 
     async def on_ready(self):
         """runs when bot is ready"""
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
 
-    async def on_message(self,message):
+    async def on_message(self, message):
         """Handles what happens when the bot receives a message"""
         # don't respond to ourselves
         if message.author == self.user:
@@ -47,13 +44,13 @@ class Faebot (discord.Client):
         if author == "transfaeries" and message.content.startswith("/forget"):
             self.conversation = []
             logging.info("clearing memory from admin prompt")
-            return 
+            return
 
         # when we're ready for the bot to reply, feed the context to OpenAi and return the response
-        
+
         self.conversation.append(f"{author}: {message.content}")
 
-        prompt = initialprompt + "\n" + '\n'.join(self.conversation) + "\nfaebot:"
+        prompt = initialprompt + "\n" + "\n".join(self.conversation) + "\nfaebot:"
         logging.info(f"PROMPT = {prompt}")
 
         async with message.channel.typing():
@@ -66,11 +63,12 @@ class Faebot (discord.Client):
 
         logging.info(f"sending reply: {reply} and logging into conversation")
         self.conversation.append(f"faebot: {reply}")
-        logging.info(f"conversation is currently {len(self.conversation)} messages long")
+        logging.info(
+            f"conversation is currently {len(self.conversation)} messages long"
+        )
 
         reply = f"```{reply}```"
         return await message.channel.send(reply)
-
 
     def generate(self, prompt: str = "", author: str = "") -> str:
         response = openai.Completion.create(  # type: ignore
@@ -81,7 +79,7 @@ class Faebot (discord.Client):
             top_p=1,
             frequency_penalty=0.99,
             presence_penalty=0.3,
-            stop=["\n\n", author+":", "faebot:"],
+            stop=["\n\n", author + ":", "faebot:"],
         )
         return response["choices"][0]["text"].strip()
 
