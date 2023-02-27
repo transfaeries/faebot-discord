@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "faebot-discord"
+version = "0.1.0"
+description = "A version of faebot (general purpose ML chatbot) to run on discord"
+authors = ["transfaeries"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+discord-py = "^2.1.1"
+openai = "^0.26.5"
+
+
+[tool.poetry.group.dev.dependencies]
+ipython = "^8.04.0"
+black = "^23.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
