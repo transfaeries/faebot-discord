@@ -15,6 +15,7 @@ openai = "^0.26.5"
 ipython = "^8.04.0"
 black = "^23.1.0"
 pylint = "^2.16.2"
+pdbpp = "^0.10.3"
 
 [build-system]
 requires = ["poetry-core"]

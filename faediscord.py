@@ -15,7 +15,7 @@ logging.basicConfig(
 
 # load secrets
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
-model = os.getenv("MODEL_NAME", "curie")
+model = os.getenv("MODEL_NAME", "davinci")
 admin = os.getenv("ADMIN", "")
 
 # initialise the prompt from file
@@ -30,7 +30,7 @@ class Faebot(discord.Client):
 
     def __init__(self, intents) -> None:
         # initialise conversation logging
-        self.conversation: list[str] = []
+        self.conversations: dict[str,list] = {} 
         # self.conversants: dict[str,int] = {}
         super().__init__(intents=intents)
 
@@ -45,16 +45,27 @@ class Faebot(discord.Client):
         if message.author == self.user:
             return
 
+        self.conversation: [str] =[]
+
+        if message.channel.id in self.conversations:
+            self.conversation=self.conversations[message.channel.id]
+
+
+        # import pdb;pdb.set_trace()
         # keep track of who sent the message
         author = str(message.author).split("#", maxsplit=1)[0]
 
-        # admin override memory clear
-        if author in admin and message.content.startswith("/forget"):
-            self.conversation = []
-            logging.info("clearing memory from admin prompt")
-            return
+        # # admin override memory clear
+        # if message.content.startswith("/forget"):
+        #     if message.author in admin and message.content.startswith("/forget"):
+        #         self.conversation = []
+        #         logging.info("clearing memory from admin prompt")
+        #         return
+        #     logging.info("not adming")
+        #     return await message.channel.send("not admin")
 
         # populate prompt with conversation history
+        # import pdb;pdb.set_trace()
         self.conversation.append(f"{author}: {message.content}")
         prompt = INITIAL_PROMPT + "\n" + "\n".join(self.conversation) + "\nfaebot:"
         logging.info(f"PROMPT = {prompt}")
@@ -77,13 +88,17 @@ class Faebot(discord.Client):
         # log the conversation, append faebot's generated reply
         logging.info(f"sending reply: {reply} and logging into conversation")
         self.conversation.append(f"faebot: {reply}")
+        self.conversations[message.channel.id] = self.conversation
         logging.info(
             f"conversation is currently {len(self.conversation)} messages long"
+            f"\nthere are currently {len(self.conversations.items())} conversations in memory"
         )
 
         # sends faebot's message with faer pattented quirk
         reply = f"```{reply}```"
         return await message.channel.send(reply)
+
+    # async def 
 
     def generate(self, prompt: str = "", author="") -> str:
         """generates completions with the OpenAI api"""
