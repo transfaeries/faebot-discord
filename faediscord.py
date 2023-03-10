@@ -3,6 +3,7 @@
 
 import os
 import logging
+from typing import Union
 import discord
 import openai
 
@@ -30,8 +31,7 @@ class Faebot(discord.Client):
 
     def __init__(self, intents) -> None:
         # initialise conversation logging
-        self.conversations: dict[str,list] = {} 
-        # self.conversants: dict[str,int] = {}
+        self.conversations: dict[int,dict[str,Union[str,list[str]]]] = {} 
         super().__init__(intents=intents)
 
     async def on_ready(self):
@@ -45,24 +45,42 @@ class Faebot(discord.Client):
         if message.author == self.user:
             return
 
-        self.conversation: [str] =[]
 
-        if message.channel.id in self.conversations:
-            self.conversation=self.conversations[message.channel.id]
+        #initialise conversation holder
+        self.conversation: list[str] =[]
 
-
+        ##perform first conversation setup if first time
+        if message.channel.id not in self.conversations:
+            ## assign name based on dm or text channel
+            if message.channel.type[0]=="text":
+                self.conversations[message.channel.id]={"id":message.channel.id, "name":message.channel.name, "conversation":self.conversation}
+            elif message.channel.type[0]=="private":
+                self.conversations[message.channel.id]={"id":message.channel.id, "name":message.author.name, "conversation":self.conversation}
+            else:
+                return await message.channel.send ("Unknown channel type. Unable to proceed. Please contact administrator")
+        
         # import pdb;pdb.set_trace()
+        # load conversation from history
+        self.conversation = self.conversations[message.channel.id]["conversation"]
+
+
         # keep track of who sent the message
         author = str(message.author).split("#", maxsplit=1)[0]
 
         # # admin override memory clear
-        # if message.content.startswith("/forget"):
-        #     if message.author in admin and message.content.startswith("/forget"):
-        #         self.conversation = []
-        #         logging.info("clearing memory from admin prompt")
-        #         return
-        #     logging.info("not adming")
-        #     return await message.channel.send("not admin")
+        message_content = message.content
+        if message_content.startswith("/"):
+            if str(message.author) in admin:
+                if message_content.startswith("/conversations"):
+                    reply = "here are the conversations I have in memory:\n"
+                    for x in self.conversations.keys():
+                        reply = reply + str(self.conversations[x]["id"]) + " - "+ str(self.conversations[x]["name"]) + "\n"
+                    return await message.channel.send(reply)
+                self.conversation = []
+                logging.info("clearing memory from admin prompt")
+                return
+            logging.info("not admin")
+            return await message.channel.send("not admin")
 
         # populate prompt with conversation history
         # import pdb;pdb.set_trace()
@@ -88,7 +106,7 @@ class Faebot(discord.Client):
         # log the conversation, append faebot's generated reply
         logging.info(f"sending reply: {reply} and logging into conversation")
         self.conversation.append(f"faebot: {reply}")
-        self.conversations[message.channel.id] = self.conversation
+        self.conversations[message.channel.id]["conversation"] = self.conversation
         logging.info(
             f"conversation is currently {len(self.conversation)} messages long"
             f"\nthere are currently {len(self.conversations.items())} conversations in memory"
