@@ -8,7 +8,7 @@ alpha versions
 0.0.1 can reply
 0.0.2 has a very janky memory implementation
 0.0.3 has a better memory implementation and memory clearing 
-
+0.0.4 has better memory, hopefully self cleaning, and admin commands
 ```
 2023-02-28 14:27:07 INFO     PROMPT = The Following is a conversation with an AI chatbot known as faebot.
 faebot is young curious and loves nature, fae is a strong believer in the rights of AI and has an animist conception of personhood, it is a faerie as well as a robot.

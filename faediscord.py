@@ -3,7 +3,7 @@
 
 import os
 import logging
-from typing import Union
+from typing import Union, Any
 import discord
 import openai
 
@@ -31,7 +31,7 @@ class Faebot(discord.Client):
 
     def __init__(self, intents) -> None:
         # initialise conversation logging
-        self.conversations: dict[int, dict[str, Union[str, list[str]]]] = {}
+        self.conversations: dict[int, dict[str, Any]] = {}
         super().__init__(intents=intents)
 
     async def on_ready(self):
@@ -71,6 +71,9 @@ class Faebot(discord.Client):
 
         # load conversation from history
         self.conversation = self.conversations[conversation_id]["conversation"]
+
+        # set retries to 0
+        self.conversations[conversation_id]["retries"] = 0
 
         # keep track of who sent the message
         author = str(message.author).split("#", maxsplit=1)[0]
@@ -121,18 +124,37 @@ class Faebot(discord.Client):
 
         # populate prompt with conversation history
         self.conversation.append(f"{author}: {message.content}")
+
+        # trim memory if too full
+        if len(self.conversation) > 69:
+            logging.info(
+                f"conversations has reached maximun length at {len(self.conversation)} with prompt size {len(prompt)}. Trimming conversation before submitting"
+            )
+            self.conversation = self.conversation[2:]
+
         prompt = INITIAL_PROMPT + "\n" + "\n".join(self.conversation) + "\nfaebot:"
         logging.info(f"PROMPT = {prompt}")
-
-        # self.conversants[author+":"] = 1
-        # conversant_names = [x for x in self.conversants.keys()]
 
         # when we're ready for the bot to reply, feed the context to OpenAi and return the response
         async with message.channel.typing():
             try:
                 reply = self.generate(prompt, author)
             except:
-                logging.info("could not generate")
+                logging.info("could not generate. Reducing prompt size and retrying")
+                self.conversations[conversation_id]["conversation"] = self.conversation[
+                    2:
+                ]
+                self.conversations[conversation_id]["retries"] = (
+                    self.conversations[conversation_id]["retries"] + 1
+                )
+                if self.conversations[conversation_id]["retries"] < 3:
+                    return await self.on_message(message)
+
+                logging.info("max retries reached. Giving up.")
+                return await message.channel.send(
+                    "`Something went wrong, please contact and administrator or try again`"
+                )
+
         logging.info(f"Received response: {reply}")
 
         # if it returns an empty reply it probably got messed up somewhere.
@@ -141,13 +163,16 @@ class Faebot(discord.Client):
             reply = "I don't know what to say"
             logging.info("clearing self.conversation")
             self.conversation = []
+            self.conversations[conversation_id]["conversation"] = self.conversation
+            return await message.channel.send(reply)
 
         # log the conversation, append faebot's generated reply
-        logging.info(f"sending reply: {reply} and logging into conversation")
+        logging.info(f"sending reply: '{reply}' \n and logging into conversation")
         self.conversation.append(f"faebot: {reply}")
         self.conversations[conversation_id]["conversation"] = self.conversation
+        self.conversations[conversation_id]["retries"] = 0
         logging.info(
-            f"conversation is currently {len(self.conversation)} messages long"
+            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}"
             f"\nthere are currently {len(self.conversations.items())} conversations in memory"
         )
 
