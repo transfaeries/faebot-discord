@@ -128,7 +128,7 @@ class Faebot(discord.Client):
         # trim memory if too full
         if len(self.conversation) > 69:
             logging.info(
-                f"conversations has reached maximun length at {len(self.conversation)} with prompt size {len(prompt)}. Trimming conversation before submitting"
+                f"conversations has reached maximun length at {len(self.conversation)} messages"
             )
             self.conversation = self.conversation[2:]
 
@@ -140,7 +140,9 @@ class Faebot(discord.Client):
             try:
                 reply = self.generate(prompt, author)
             except:
-                logging.info("could not generate. Reducing prompt size and retrying")
+                logging.info(
+                    f"could not generate. Reducing prompt size and retrying. Conversation is currently {len(self.conversation)} messages long and prompt size is {len(prompt)} characters long"
+                )
                 self.conversations[conversation_id]["conversation"] = self.conversation[
                     2:
                 ]
