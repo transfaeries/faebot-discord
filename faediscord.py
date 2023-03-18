@@ -3,7 +3,8 @@
 
 import os
 import logging
-from typing import Union, Any
+from typing import Any
+import asyncio
 import discord
 import openai
 
@@ -16,7 +17,7 @@ logging.basicConfig(
 
 # load secrets
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
-model = os.getenv("MODEL_NAME", "davinci")
+model = os.getenv("MODEL_NAME", "curie")
 admin = os.getenv("ADMIN", "")
 
 # initialise the prompt from file
@@ -31,7 +32,8 @@ class Faebot(discord.Client):
 
     def __init__(self, intents) -> None:
         # initialise conversation logging
-        self.conversations: dict[int, dict[str, Any]] = {}
+        self.conversations: dict[str, dict[str, Any]] = {}
+        self.retries: dict[str, int] = {}
         super().__init__(intents=intents)
 
     async def on_ready(self):
@@ -51,19 +53,16 @@ class Faebot(discord.Client):
 
         ##perform first conversation setup if first time
         if conversation_id not in self.conversations:
+            self.conversations[conversation_id] = {
+                "id": conversation_id,
+                "conversation": self.conversation,
+                "conversants": [],
+            }
             ## assign name based on dm or text channel
             if message.channel.type[0] == "text":
-                self.conversations[conversation_id] = {
-                    "id": conversation_id,
-                    "name": str(message.channel.name),
-                    "conversation": self.conversation,
-                }
+                self.conversations[conversation_id]["name"] = str(message.channel.name)
             elif message.channel.type[0] == "private":
-                self.conversations[conversation_id] = {
-                    "id": conversation_id,
-                    "name": str(message.author.name),
-                    "conversation": self.conversation,
-                }
+                self.conversations[conversation_id]["name"] = str(message.author.name)
             else:
                 return await message.channel.send(
                     "Unknown channel type. Unable to proceed. Please contact administrator"
@@ -72,14 +71,13 @@ class Faebot(discord.Client):
         # load conversation from history
         self.conversation = self.conversations[conversation_id]["conversation"]
 
-        # set retries to 0
-        self.conversations[conversation_id]["retries"] = 0
-
-        # keep track of who sent the message
+        # keep track of who sends messages
         author = str(message.author).split("#", maxsplit=1)[0]
+        if author not in self.conversations[conversation_id]["conversants"]:
+            self.conversations[conversation_id]["conversants"].append(author)
 
-        # message_content = message.content
-        # Admin commands
+        ###### Admin commands ##########
+
         if message.content.startswith("/"):
             ##tokenize the message
             message_tokens = message.content.split(" ")
@@ -122,39 +120,46 @@ class Faebot(discord.Client):
             logging.info("Admin command attempted whilst not admint by")
             return await message.channel.send("you must be admin to use slash commands")
 
-        # populate prompt with conversation history
-        self.conversation.append(f"{author}: {message.content}")
-
         # trim memory if too full
         if len(self.conversation) > 69:
             logging.info(
-                f"conversations has reached maximun length at {len(self.conversation)} messages"
+                f"conversations has reached maximun length at {len(self.conversation)} messages. Removing the oldest two messages."
             )
             self.conversation = self.conversation[2:]
 
-        prompt = INITIAL_PROMPT + "\n" + "\n".join(self.conversation) + "\nfaebot:"
-        logging.info(f"PROMPT = {prompt}")
+        # populate prompt with conversation history
+
+        prompt = (
+            INITIAL_PROMPT
+            + "\n"
+            + "\n".join(self.conversation)
+            + f"\n{author}: {message.content}"
+            + "\nfaebot:"
+        )
+        # logging.info(f"PROMPT = {prompt}")
 
         # when we're ready for the bot to reply, feed the context to OpenAi and return the response
         async with message.channel.typing():
+            retries = self.retries.get(conversation_id, 0)
             try:
                 reply = self.generate(prompt, author)
+                self.retries[conversation_id] = 0
             except:
                 logging.info(
-                    f"could not generate. Reducing prompt size and retrying. Conversation is currently {len(self.conversation)} messages long and prompt size is {len(prompt)} characters long"
+                    f"could not generate. Reducing prompt size and retrying. Conversation is currently {len(self.conversation)} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
                 )
                 self.conversations[conversation_id]["conversation"] = self.conversation[
                     2:
                 ]
-                self.conversations[conversation_id]["retries"] = (
-                    self.conversations[conversation_id]["retries"] + 1
-                )
-                if self.conversations[conversation_id]["retries"] < 3:
+                if retries < 3:
+                    await asyncio.sleep(retries * 1000)
+                    self.retries[conversation_id] = retries + 1
                     return await self.on_message(message)
 
                 logging.info("max retries reached. Giving up.")
+                self.retries[conversation_id] = 0
                 return await message.channel.send(
-                    "`Something went wrong, please contact and administrator or try again`"
+                    "`Something went wrong, please contact an administrator or try again`"
                 )
 
         logging.info(f"Received response: {reply}")
@@ -170,11 +175,11 @@ class Faebot(discord.Client):
 
         # log the conversation, append faebot's generated reply
         logging.info(f"sending reply: '{reply}' \n and logging into conversation")
+        self.conversation.append(f"{author}: {message.content}")
         self.conversation.append(f"faebot: {reply}")
         self.conversations[conversation_id]["conversation"] = self.conversation
-        self.conversations[conversation_id]["retries"] = 0
         logging.info(
-            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}"
+            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
             f"\nthere are currently {len(self.conversations.items())} conversations in memory"
         )
 
@@ -194,7 +199,7 @@ class Faebot(discord.Client):
             top_p=1,
             frequency_penalty=0.99,
             presence_penalty=0.3,
-            stop=["\n\n", author + ":", "faebot:"],
+            stop=["\n", author + ":", "faebot:"],
         )
         return response["choices"][0]["text"].strip()
 
