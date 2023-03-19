@@ -5,6 +5,7 @@ import os
 import logging
 from typing import Any
 import asyncio
+from random import choice
 import discord
 import openai
 
@@ -34,6 +35,8 @@ class Faebot(discord.Client):
         # initialise conversation logging
         self.conversations: dict[str, dict[str, Any]] = {}
         self.retries: dict[str, int] = {}
+        logging.info(f"models available : {str(model)}")
+        self.models = model.split(",")
         super().__init__(intents=intents)
 
     async def on_ready(self):
@@ -136,13 +139,15 @@ class Faebot(discord.Client):
             + f"\n{author}: {message.content}"
             + "\nfaebot:"
         )
-        # logging.info(f"PROMPT = {prompt}")
+        # if isinstance(self.models, list):
+        self.model = choice(self.models)
+        logging.info(f"picked model : {self.model}")
 
         # when we're ready for the bot to reply, feed the context to OpenAi and return the response
         async with message.channel.typing():
             retries = self.retries.get(conversation_id, 0)
             try:
-                reply = self.generate(prompt, author)
+                reply = self.generate(prompt, author, self.model)
                 self.retries[conversation_id] = 0
             except:
                 logging.info(
@@ -189,10 +194,10 @@ class Faebot(discord.Client):
 
     # async def
 
-    def generate(self, prompt: str = "", author="") -> str:
+    def generate(self, prompt: str = "", author="", engine="curie") -> str:
         """generates completions with the OpenAI api"""
         response = openai.Completion.create(  # type: ignore
-            engine=model,
+            engine=engine,
             prompt=prompt,
             temperature=0.7,
             max_tokens=512,
