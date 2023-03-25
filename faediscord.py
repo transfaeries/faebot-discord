@@ -8,16 +8,19 @@ import asyncio
 from random import choice
 import discord
 import openai
+import cohere
 
 # set up logging
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
+    level=logging.DEBUG,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 # load secrets
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
+cohere_key = os.getenv("COHERE_API_KEY", "")
+co = cohere.Client(cohere_key)
 model = os.getenv("MODEL_NAME", "curie")
 admin = os.getenv("ADMIN", "")
 
@@ -141,13 +144,19 @@ class Faebot(discord.Client):
         )
         # if isinstance(self.models, list):
         self.model = choice(self.models)
-        logging.info(f"picked model : {self.model}")
+        # logging.info(f"picked model : {self.model}")
 
         # when we're ready for the bot to reply, feed the context to OpenAi and return the response
         async with message.channel.typing():
             retries = self.retries.get(conversation_id, 0)
             try:
-                reply = self.generate(prompt, author, self.model)
+                # reply = self.generate(prompt, author, self.model)
+                # reply = co.generate(
+                #     prompt=prompt,
+                #     model="xlarge",
+                #     stop_sequences=["\n", author + ":", "faebot:"],
+                #     max_tokens=256,
+                # )
                 self.retries[conversation_id] = 0
             except:
                 logging.info(
@@ -157,8 +166,8 @@ class Faebot(discord.Client):
                     2:
                 ]
                 if retries < 3:
-                    await asyncio.sleep(retries * 1000)
-                    self.retries[conversation_id] = retries + 1
+                    await asyncio.sleep(retries * 10)
+                    self.retries[conversation_id] = self.retries[conversation_id] + 1
                     return await self.on_message(message)
 
                 logging.info("max retries reached. Giving up.")
@@ -168,6 +177,7 @@ class Faebot(discord.Client):
                 )
 
         logging.info(f"Received response: {reply}")
+        reply = reply[0].text.strip()
 
         # if it returns an empty reply it probably got messed up somewhere.
         # clear memory and carry on.
@@ -194,10 +204,10 @@ class Faebot(discord.Client):
 
     # async def
 
-    def generate(self, prompt: str = "", author="", engine="curie") -> str:
+    def generate_open_AI(self, prompt: str = "", author="", model="curie") -> str:
         """generates completions with the OpenAI api"""
         response = openai.Completion.create(  # type: ignore
-            engine=engine,
+            engine=model,
             prompt=prompt,
             temperature=0.7,
             max_tokens=512,
@@ -207,6 +217,20 @@ class Faebot(discord.Client):
             stop=["\n", author + ":", "faebot:"],
         )
         return response["choices"][0]["text"].strip()
+
+    def generate_cohere(self, prompt: str="", author="", model="xlarge") -> str:
+        """generates completions with the Cohere.ai api"""
+        response = co.generate(
+            prompt=prompt,
+            model=model,
+            stop_sequences=["\n", author + ":", "faebot:"],
+            max_tokens=256,
+            temperature=0.7,
+            frequency_penalty=0.99,
+            presence_penalty=0.3
+        )
+        return response[0].text.strip()
+        
 
 
 # intents for the discordbot
