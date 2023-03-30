@@ -10,3 +10,4 @@ alpha versions
 0.0.3 has a better memory implementation and memory clearing 
 0.0.4 has better memory, hopefully self cleaning, and admin commands
 0.0.5 runs on cohere. want to make it run in many.
+0.0.6 uses a cleverer method to prevent impersonations, raised the temperature

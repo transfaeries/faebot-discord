@@ -29,6 +29,10 @@ INITIAL_PROMPT = ""
 with open("prompts.txt", "r", encoding="utf-8") as promptfile:
     INITIAL_PROMPT = promptfile.read()
 
+# the stop character to stop generation
+
+STOP_PREFIX = ">"
+
 
 # declare a new class that inherits the discord client class
 class Faebot(discord.Client):
@@ -139,8 +143,8 @@ class Faebot(discord.Client):
             INITIAL_PROMPT
             + "\n"
             + "\n".join(self.conversation)
-            + f"\n{author}: {message.content}"
-            + "\nfaebot:"
+            + f"\n{STOP_PREFIX}{author}: {message.content}"
+            + f"\n{STOP_PREFIX}faebot:"
         )
         # if isinstance(self.models, list):
         self.model = choice(self.models)
@@ -150,13 +154,7 @@ class Faebot(discord.Client):
         async with message.channel.typing():
             retries = self.retries.get(conversation_id, 0)
             try:
-                # reply = self.generate(prompt, author, self.model)
-                # reply = co.generate(
-                #     prompt=prompt,
-                #     model="xlarge",
-                #     stop_sequences=["\n", author + ":", "faebot:"],
-                #     max_tokens=256,
-                # )
+                reply = self.generate_cohere(prompt, author, self.model)
                 self.retries[conversation_id] = 0
             except:
                 logging.info(
@@ -167,7 +165,7 @@ class Faebot(discord.Client):
                 ]
                 if retries < 3:
                     await asyncio.sleep(retries * 10)
-                    self.retries[conversation_id] = self.retries[conversation_id] + 1
+                    self.retries[conversation_id] = retries + 1
                     return await self.on_message(message)
 
                 logging.info("max retries reached. Giving up.")
@@ -178,6 +176,8 @@ class Faebot(discord.Client):
 
         logging.info(f"Received response: {reply}")
         reply = reply[0].text.strip()
+        reply = reply.strip(">")
+
 
         # if it returns an empty reply it probably got messed up somewhere.
         # clear memory and carry on.
@@ -190,8 +190,8 @@ class Faebot(discord.Client):
 
         # log the conversation, append faebot's generated reply
         logging.info(f"sending reply: '{reply}' \n and logging into conversation")
-        self.conversation.append(f"{author}: {message.content}")
-        self.conversation.append(f"faebot: {reply}")
+        self.conversation.append(f"{STOP_PREFIX}{author}: {message.content}")
+        self.conversation.append(f"{STOP_PREFIX}faebot: {reply}")
         self.conversations[conversation_id]["conversation"] = self.conversation
         logging.info(
             f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
@@ -209,12 +209,12 @@ class Faebot(discord.Client):
         response = openai.Completion.create(  # type: ignore
             engine=model,
             prompt=prompt,
-            temperature=0.7,
+            temperature=1,
             max_tokens=512,
             top_p=1,
             frequency_penalty=0.99,
             presence_penalty=0.3,
-            stop=["\n", author + ":", "faebot:"],
+            stop=["\n\n", STOP_PREFIX],
         )
         return response["choices"][0]["text"].strip()
 
@@ -222,14 +222,14 @@ class Faebot(discord.Client):
         """generates completions with the Cohere.ai api"""
         response = co.generate(
             prompt=prompt,
-            model=model,
-            stop_sequences=["\n", author + ":", "faebot:"],
+            model="xlarge",
+            stop_sequences=["\n\n", STOP_PREFIX,"\n>","<|endoftext\>"],
             max_tokens=256,
-            temperature=0.7,
+            temperature=1,
             frequency_penalty=0.99,
             presence_penalty=0.3
         )
-        return response[0].text.strip()
+        return response
         
 
 
