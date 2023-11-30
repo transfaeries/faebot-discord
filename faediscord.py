@@ -18,7 +18,7 @@ logging.basicConfig(
 
 # load secrets
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
-model = os.getenv("MODEL_NAME", "curie")
+model = os.getenv("MODEL_NAME", "davinci")
 admin = os.getenv("ADMIN", "")
 
 # initialise the prompt from file
@@ -75,7 +75,7 @@ class Faebot(discord.Client):
         self.conversation = self.conversations[conversation_id]["conversation"]
 
         # keep track of who sends messages
-        author = str(message.author).split("#", maxsplit=1)[0]
+        author = message.author.name
         if author not in self.conversations[conversation_id]["conversants"]:
             self.conversations[conversation_id]["conversants"].append(author)
 
@@ -84,7 +84,7 @@ class Faebot(discord.Client):
         if message.content.startswith("/"):
             ##tokenize the message
             message_tokens = message.content.split(" ")
-            if str(message.author) in admin:
+            if message.author.name in admin:
                 if message_tokens[0] == "/conversations":
                     ## list conversations in memory
                     reply = "here are the conversations I have in memory:\n"
@@ -100,27 +100,46 @@ class Faebot(discord.Client):
                         )
                     return await message.channel.send(reply)
                 if message_tokens[0] == "/forget":
-                    # import pdb;pdb.set_trace()
-                    if (
+                    # check if conversation id was provided
+                    if len(message_tokens) < 2:
+                        to_forget = conversation_id
+                        logging.info(
+                            f"asked to forget without providing a conversation id, using current conversation {conversation_id}"
+                        )
+                    # check if provided conversation id is valid
+                    elif (
                         isinstance(message_tokens[1], str)
                         and message_tokens[1] in self.conversations
                     ):
-                        self.conversation = []
-                        self.conversations[message_tokens[1]][
-                            "conversation"
-                        ] = self.conversation
+                        to_forget = message_tokens[1]
 
-                        logging.info("clearing memory from admin prompt")
-                        return await message.channel.send(
-                            f"cleared conversation {message_tokens[1]}"  # - {self.conversations[message_tokens[1]['name']]}"
+                    else:
+                        logging.info(
+                            f"asked to clear memory, but no conversation id was provided. Message was {message.content}"
                         )
+                        return await message.channel.send(
+                            "you need to provide a conversation ID"
+                        )
+
+                    # clear conversation
+                    self.conversation = []
+                    self.conversations[to_forget]["conversation"] = self.conversation
+
                     logging.info(
-                        f"asked to clear memory, but no conversation id was provided. Message was {message.content}"
+                        f"clearing memory from admin prompt in conversation {to_forget}"
                     )
                     return await message.channel.send(
-                        "you need to provide a conversation ID"
+                        f"cleared conversation {to_forget}"  # - {self.conversations[message_tokens[1]['name']]}"
                     )
-            logging.info("Admin command attempted whilst not admint by")
+                else:
+                    logging.info(f"command not known {message.content}")
+                    return await message.channel.send(
+                        f"failed to recognise command {message.content}"
+                    )
+
+            logging.info(
+                f"Admin command attempted whilst not admin by {message.author.name}"
+            )
             return await message.channel.send("you must be admin to use slash commands")
 
         # trim memory if too full
@@ -187,6 +206,10 @@ class Faebot(discord.Client):
             f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
             f"\nthere are currently {len(self.conversations.items())} conversations in memory"
         )
+
+        # # uncomment to enable full conversation logging
+        for line in self.conversation:
+            logging.info(line)
 
         # sends faebot's message with faer pattented quirk
         reply = f"```{reply}```"
