@@ -155,6 +155,7 @@ class Faebot(discord.Client):
             retries = self.retries.get(conversation_id, 0)
             try:
                 reply = self.generate_cohere(prompt, author, self.model)
+                # reply = self.generate_open_AI(prompt, author, self.model)
                 self.retries[conversation_id] = 0
             except:
                 logging.info(
@@ -177,7 +178,6 @@ class Faebot(discord.Client):
         logging.info(f"Received response: {reply}")
         reply = reply[0].text.strip()
         reply = reply.strip(">")
-
 
         # if it returns an empty reply it probably got messed up somewhere.
         # clear memory and carry on.
@@ -206,10 +206,10 @@ class Faebot(discord.Client):
 
     def generate_open_AI(self, prompt: str = "", author="", model="curie") -> str:
         """generates completions with the OpenAI api"""
-        response = openai.Completion.create(  # type: ignore
-            engine=model,
+        response = openai.ChatCompletion.create(  # type: ignore
+            engine="gpt-3.5-turbo",
             prompt=prompt,
-            temperature=1,
+            temperature=0.90,
             max_tokens=512,
             top_p=1,
             frequency_penalty=0.99,
@@ -218,19 +218,18 @@ class Faebot(discord.Client):
         )
         return response["choices"][0]["text"].strip()
 
-    def generate_cohere(self, prompt: str="", author="", model="xlarge") -> str:
+    def generate_cohere(self, prompt: str = "", author="", model="xlarge") -> str:
         """generates completions with the Cohere.ai api"""
         response = co.generate(
             prompt=prompt,
             model="xlarge",
-            stop_sequences=["\n\n", STOP_PREFIX,"\n>","<|endoftext\>"],
+            stop_sequences=["\n\n", STOP_PREFIX, "\n>", "<|endoftext\>"],
             max_tokens=256,
-            temperature=1,
+            temperature=0.90,
             frequency_penalty=0.99,
-            presence_penalty=0.3
+            presence_penalty=0.3,
         )
         return response
-        
 
 
 # intents for the discordbot
