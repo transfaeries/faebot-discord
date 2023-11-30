@@ -17,8 +17,12 @@ logging.basicConfig(
 )
 
 # load secrets
-openai.api_key = os.getenv("OPENAI_API_KEY", "")
-model = os.getenv("MODEL_NAME", "davinci")
+client = openai(
+  api_key=os.getenv("API_KEY", ""),
+  base_url="https://openai-proxy.replicate.com/v1"
+)
+
+model = os.getenv("MODEL_NAME", "meta/llama-2-70b-chat")
 admin = os.getenv("ADMIN", "")
 
 # initialise the prompt from file
@@ -219,7 +223,7 @@ class Faebot(discord.Client):
 
     def generate(self, prompt: str = "", author="", engine="curie") -> str:
         """generates completions with the OpenAI api"""
-        response = openai.Completion.create(  # type: ignore
+        response = client.Completion.create(  # type: ignore
             engine=engine,
             prompt=prompt,
             temperature=0.7,
