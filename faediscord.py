@@ -22,7 +22,7 @@ admin = os.getenv("ADMIN", "")
 
 # initialise the prompt from file
 INITIAL_PROMPT = ""
-with open("promptsdev.txt", "r", encoding="utf-8") as promptfile:
+with open("prompts.txt", "r", encoding="utf-8") as promptfile:
     INITIAL_PROMPT = promptfile.read()
 
 
