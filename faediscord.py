@@ -214,9 +214,11 @@ class Faebot(discord.Client):
 
     # async def
 
-    def generate(self, prompt: str = "", author="", model="meta/llama-2-70b-chat") -> str:
+    def generate(
+        self, prompt: str = "", author="", model="meta/llama-2-70b-chat"
+    ) -> str:
         """generates completions with the OpenAI api"""
-        
+
         output = replicate.run(
             model,
             input={
@@ -227,13 +229,12 @@ class Faebot(discord.Client):
                 "temperature": 0.7,
                 "system_prompt": INITIAL_PROMPT,
                 "max_new_tokens": 250,
-                "min_new_tokens": -1
-            }
-            )
-        response=''.join(output)
+                "min_new_tokens": -1,
+            },
+        )
+        response = "".join(output)
         return response
 
-        
         # response = client.Completion.create(  # type: ignore
         #     engine=engine,
         #     prompt=prompt,
