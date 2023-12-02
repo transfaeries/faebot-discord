@@ -205,8 +205,8 @@ class Faebot(discord.Client):
         )
 
         # # uncomment to enable full conversation logging
-        for line in self.conversation:
-            logging.info(line)
+        # for line in self.conversation:
+        #     logging.info(line)
 
         # sends faebot's message with faer pattented quirk
         reply = f"```{reply}```"
