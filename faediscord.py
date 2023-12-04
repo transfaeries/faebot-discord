@@ -7,7 +7,7 @@ from typing import Any
 import asyncio
 from random import choice
 import discord
-import openai
+import replicate
 
 # set up logging
 logging.basicConfig(
@@ -16,9 +16,8 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-# load secrets
-openai.api_key = os.getenv("OPENAI_API_KEY", "")
-model = os.getenv("MODEL_NAME", "davinci")
+
+model = os.getenv("MODEL_NAME", "meta/llama-2-70b-chat")
 admin = os.getenv("ADMIN", "")
 
 # initialise the prompt from file
@@ -152,9 +151,7 @@ class Faebot(discord.Client):
         # populate prompt with conversation history
 
         prompt = (
-            INITIAL_PROMPT
-            + "\n"
-            + "\n".join(self.conversation)
+            "\n".join(self.conversation)
             + f"\n{author}: {message.content}"
             + "\nfaebot:"
         )
@@ -208,8 +205,8 @@ class Faebot(discord.Client):
         )
 
         # # uncomment to enable full conversation logging
-        for line in self.conversation:
-            logging.info(line)
+        # for line in self.conversation:
+        #     logging.info(line)
 
         # sends faebot's message with faer pattented quirk
         reply = f"```{reply}```"
@@ -217,19 +214,38 @@ class Faebot(discord.Client):
 
     # async def
 
-    def generate(self, prompt: str = "", author="", engine="curie") -> str:
+    def generate(
+        self, prompt: str = "", author="", model="meta/llama-2-70b-chat"
+    ) -> str:
         """generates completions with the OpenAI api"""
-        response = openai.Completion.create(  # type: ignore
-            engine=engine,
-            prompt=prompt,
-            temperature=0.7,
-            max_tokens=512,
-            top_p=1,
-            frequency_penalty=0.99,
-            presence_penalty=0.3,
-            stop=["\n", author + ":", "faebot:"],
+
+        output = replicate.run(
+            model,
+            input={
+                "debug": False,
+                "top_k": 50,
+                "top_p": 1,
+                "prompt": prompt,
+                "temperature": 0.7,
+                "system_prompt": INITIAL_PROMPT,
+                "max_new_tokens": 250,
+                "min_new_tokens": -1,
+            },
         )
-        return response["choices"][0]["text"].strip()
+        response = "".join(output)
+        return response
+
+        # response = client.Completion.create(  # type: ignore
+        #     engine=engine,
+        #     prompt=prompt,
+        #     temperature=0.7,
+        #     max_tokens=512,
+        #     top_p=1,
+        #     frequency_penalty=0.99,
+        #     presence_penalty=0.3,
+        #     stop=["\n", author + ":", "faebot:"],
+        # )
+        # return response["choices"][0]["text"].strip()
 
 
 # intents for the discordbot

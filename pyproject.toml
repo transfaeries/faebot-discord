@@ -6,9 +6,9 @@ authors = ["transfaeries"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 discord-py = "^2.1.1"
-openai = "^0.26.5"
+replicate = "^0.21.0"
 
 
 [tool.poetry.group.dev.dependencies]
