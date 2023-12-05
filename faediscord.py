@@ -21,17 +21,14 @@ model = os.getenv("MODEL_NAME", "meta/llama-2-70b-chat")
 admin = os.getenv("ADMIN", "")
 
 
-
-
 # declare a new class that inherits the discord client class
 class Faebot(discord.Client):
     """a general purpose discord chatbot"""
 
     def __init__(self, intents) -> None:
-
         # initialise the system prompt from file
         self.system_prompt = ""
-        with open("promptsdev.txt", "r", encoding="utf-8") as promptfile:
+        with open("prompts.txt", "r", encoding="utf-8") as promptfile:
             self.system_prompt = promptfile.read()
 
         # initialise conversation logging
@@ -113,7 +110,7 @@ class Faebot(discord.Client):
                         isinstance(message_tokens[1], str)
                         and message_tokens[1] in self.conversations
                     ):
-                        to_forget = str(message_tokens[1,:])
+                        to_forget = str(message_tokens[1, :])
 
                     else:
                         logging.info(
@@ -133,13 +130,11 @@ class Faebot(discord.Client):
                     return await message.channel.send(
                         f"cleared conversation {to_forget}"  # - {self.conversations[message_tokens[1]['name']]}"
                     )
-                if message_tokens[0]=="/prompt":
-                    #allows live editing of the system prompt
-                    self.system_prompt = ' '.join(message_tokens[1:])
+                if message_tokens[0] == "/prompt":
+                    # allows live editing of the system prompt
+                    self.system_prompt = " ".join(message_tokens[1:])
                     logging.info(f"system prompt updated to: \n{self.system_prompt}")
-                    return await message.channel.send(
-                        "system prompt edited"
-                    )
+                    return await message.channel.send("system prompt edited")
                 else:
                     logging.info(f"command not known {message.content}")
                     return await message.channel.send(
@@ -246,18 +241,6 @@ class Faebot(discord.Client):
         )
         response = "".join(output)
         return response
-
-        # response = client.Completion.create(  # type: ignore
-        #     engine=engine,
-        #     prompt=prompt,
-        #     temperature=0.7,
-        #     max_tokens=512,
-        #     top_p=1,
-        #     frequency_penalty=0.99,
-        #     presence_penalty=0.3,
-        #     stop=["\n", author + ":", "faebot:"],
-        # )
-        # return response["choices"][0]["text"].strip()
 
 
 # intents for the discordbot
