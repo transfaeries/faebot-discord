@@ -8,6 +8,8 @@ import asyncio
 from random import choice
 import discord
 import replicate
+from dataclasses import dataclass
+
 
 # set up logging
 logging.basicConfig(
@@ -19,7 +21,24 @@ logging.basicConfig(
 
 model = os.getenv("MODEL_NAME", "meta/llama-2-70b-chat")
 admin = os.getenv("ADMIN", "")
+test_message = ""
 
+
+@dataclass
+class Message:
+    """for storing message objects with metadata"""
+    id: int
+    channel: str
+    author_name: str
+    author_id: int
+
+@dataclass
+class Conversation:
+    """for storing conversations"""
+    id: int
+    channel: str
+    chatlog: dict[int,Message]
+    
 
 # declare a new class that inherits the discord client class
 class Faebot(discord.Client):
@@ -28,7 +47,7 @@ class Faebot(discord.Client):
     def __init__(self, intents) -> None:
         # initialise the system prompt from file
         self.system_prompt = ""
-        with open("prompts.txt", "r", encoding="utf-8") as promptfile:
+        with open("promptsdev.txt", "r", encoding="utf-8") as promptfile:
             self.system_prompt = promptfile.read()
 
         # initialise conversation logging
@@ -48,6 +67,7 @@ class Faebot(discord.Client):
         # don't respond to ourselves
         if message.author == self.user:
             return
+        
 
         # initialise conversation holder
         self.conversation: list[str] = []
