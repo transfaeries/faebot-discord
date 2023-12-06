@@ -27,18 +27,21 @@ test_message = ""
 @dataclass
 class Message:
     """for storing message objects with metadata"""
+
     id: int
     channel: str
     author_name: str
     author_id: int
 
+
 @dataclass
 class Conversation:
     """for storing conversations"""
+
     id: int
     channel: str
-    chatlog: dict[int,Message]
-    
+    chatlog: dict[int, Message]
+
 
 # declare a new class that inherits the discord client class
 class Faebot(discord.Client):
@@ -67,7 +70,6 @@ class Faebot(discord.Client):
         # don't respond to ourselves
         if message.author == self.user:
             return
-        
 
         # initialise conversation holder
         self.conversation: list[str] = []
