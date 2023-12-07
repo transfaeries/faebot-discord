@@ -50,11 +50,11 @@ class Faebot(discord.Client):
     def __init__(self, intents) -> None:
         # initialise the system prompt from file
         self.system_prompt = ""
-        with open("promptsdev.txt", "r", encoding="utf-8") as promptfile:
+        with open("prompts.txt", "r", encoding="utf-8") as promptfile:
             self.system_prompt = promptfile.read()
 
         # initialise conversation logging
-        self.conversations: dict[str, dict[str, Any]] = {}
+        self.conversations: dict[int, Conversation] = {}
         self.retries: dict[str, int] = {}
         logging.info(f"models available : {str(model)}")
         self.models = model.split(",")
@@ -72,8 +72,9 @@ class Faebot(discord.Client):
             return
 
         # initialise conversation holder
-        self.conversation: list[str] = []
-        conversation_id = str(message.channel.id)
+        conversation_id=message.channel.id
+
+        self.conversation = Conversation (id=message.channel.id)
 
         ##perform first conversation setup if first time
         if conversation_id not in self.conversations:
@@ -100,74 +101,11 @@ class Faebot(discord.Client):
         if author not in self.conversations[conversation_id]["conversants"]:
             self.conversations[conversation_id]["conversants"].append(author)
 
-        ###### Admin commands ##########
 
-        if message.content.startswith("/"):
-            ##tokenize the message
-            message_tokens = message.content.split(" ")
-            if message.author.name in admin:
-                if message_tokens[0] == "/conversations":
-                    ## list conversations in memory
-                    reply = "here are the conversations I have in memory:\n"
-                    for x in self.conversations.keys():
-                        reply = (
-                            reply
-                            + str(self.conversations[x]["id"])
-                            + " - "
-                            + str(self.conversations[x]["name"])
-                            + " - "
-                            + str(len(self.conversations[x]["conversation"]))
-                            + "\n"
-                        )
-                    return await message.channel.send(reply)
-                if message_tokens[0] == "/forget":
-                    # check if conversation id was provided
-                    if len(message_tokens) < 2:
-                        to_forget = conversation_id
-                        logging.info(
-                            f"asked to forget without providing a conversation id, using current conversation {conversation_id}"
-                        )
-                    # check if provided conversation id is valid
-                    elif (
-                        isinstance(message_tokens[1], str)
-                        and message_tokens[1] in self.conversations
-                    ):
-                        to_forget = str(message_tokens[1, :])
-
-                    else:
-                        logging.info(
-                            f"asked to clear memory, but no conversation id was provided. Message was {message.content}"
-                        )
-                        return await message.channel.send(
-                            "you need to provide a conversation ID"
-                        )
-
-                    # clear conversation
-                    self.conversation = []
-                    self.conversations[to_forget]["conversation"] = self.conversation
-
-                    logging.info(
-                        f"clearing memory from admin prompt in conversation {to_forget}"
-                    )
-                    return await message.channel.send(
-                        f"cleared conversation {to_forget}"  # - {self.conversations[message_tokens[1]['name']]}"
-                    )
-                if message_tokens[0] == "/prompt":
-                    # allows live editing of the system prompt
-                    self.system_prompt = " ".join(message_tokens[1:])
-                    logging.info(f"system prompt updated to: \n{self.system_prompt}")
-                    return await message.channel.send("system prompt edited")
-                else:
-                    logging.info(f"command not known {message.content}")
-                    return await message.channel.send(
-                        f"failed to recognise command {message.content}"
-                    )
-
-            logging.info(
-                f"Admin command attempted whilst not admin by {message.author.name}"
-            )
-            return await message.channel.send("you must be admin to use slash commands")
-
+        if message.content.startswith("/"): ##admin commands
+            return await self.execute_admin_command(message)
+            
+           
         # trim memory if too full
         if len(self.conversation) > 20:
             logging.info(
@@ -182,7 +120,7 @@ class Faebot(discord.Client):
             + f"\n{author}: {message.content}"
             + "\nfaebot:"
         )
-        # if isinstance(self.models, list):
+        
         self.model = choice(self.models)
         logging.info(f"picked model : {self.model}")
 
@@ -239,14 +177,11 @@ class Faebot(discord.Client):
         reply = f"```{reply}```"
         return await message.channel.send(reply)
 
-    # async def
-
-    # async def
 
     async def generate(
         self, prompt: str = "", author="", model="meta/llama-2-70b-chat"
     ) -> str:
-        """generates completions with the OpenAI api"""
+        """generates completions with the replicate api"""
 
         output = replicate.run(
             model,
@@ -263,6 +198,74 @@ class Faebot(discord.Client):
         )
         response = "".join(output)
         return response
+    
+    ###### Admin commands ##########
+    async def execute_admin_command(self, message):
+         ##tokenize the message
+        message_tokens = message.content.split(" ")
+        if message.author.name in admin:
+            if message_tokens[0] == "/conversations":
+                ## list conversations in memory
+                reply = "here are the conversations I have in memory:\n"
+                for x in self.conversations.keys():
+                    reply = (
+                        reply
+                        + str(self.conversations[x]["id"])
+                        + " - "
+                        + str(self.conversations[x]["name"])
+                        + " - "
+                        + str(len(self.conversations[x]["conversation"]))
+                        + "\n"
+                    )
+                return await message.channel.send(reply)
+            if message_tokens[0] == "/forget":
+                # check if conversation id was provided
+                if len(message_tokens) < 2:
+                    to_forget = conversation_id
+                    logging.info(
+                        f"asked to forget without providing a conversation id, using current conversation {conversation_id}"
+                    )
+                # check if provided conversation id is valid
+                elif (
+                    isinstance(message_tokens[1], str)
+                    and message_tokens[1] in self.conversations
+                ):
+                    to_forget = str(message_tokens[1, :])
+
+                else:
+                    logging.info(
+                        f"asked to clear memory, but no conversation id was provided. Message was {message.content}"
+                    )
+                    return await message.channel.send(
+                        "you need to provide a conversation ID"
+                    )
+
+                # clear conversation
+                self.conversation = []
+                self.conversations[to_forget]["conversation"] = self.conversation
+
+                logging.info(
+                    f"clearing memory from admin prompt in conversation {to_forget}"
+                )
+                return await message.channel.send(
+                    f"cleared conversation {to_forget}"  # - {self.conversations[message_tokens[1]['name']]}"
+                )
+            if message_tokens[0] == "/prompt":
+                # allows live editing of the system prompt
+                self.system_prompt = " ".join(message_tokens[1:])
+                logging.info(f"system prompt updated to: \n{self.system_prompt}")
+                return await message.channel.send("system prompt edited")
+            else:
+                logging.info(f"command not known {message.content}")
+                return await message.channel.send(
+                    f"failed to recognise command {message.content}"
+                )
+
+        logging.info(
+            f"Admin command attempted whilst not admin by {message.author.name}"
+        )
+        return await message.channel.send("you must be admin to use slash commands")
+
 
 
 # intents for the discordbot
