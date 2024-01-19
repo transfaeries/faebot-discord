@@ -3,6 +3,7 @@
 
 import os
 import logging
+import time
 from typing import Any
 import asyncio
 from random import choice
@@ -32,6 +33,7 @@ class Message:
     channel: str
     author_name: str
     author_id: int
+    timestamp: time
 
 
 @dataclass
@@ -40,7 +42,8 @@ class Conversation:
 
     id: int
     channel: str
-    chatlog: dict[int, Message]
+    chatlog: list # dict[int, Message]
+    conversants: list
 
 
 # declare a new class that inherits the discord client class
@@ -71,35 +74,34 @@ class Faebot(discord.Client):
         if message.author == self.user:
             return
 
-        # initialise conversation holder
+        ## check if there's already a conversation for this channel in memory
         conversation_id=message.channel.id
-
-        self.conversation = Conversation (id=message.channel.id)
 
         ##perform first conversation setup if first time
         if conversation_id not in self.conversations:
-            self.conversations[conversation_id] = {
-                "id": conversation_id,
-                "conversation": self.conversation,
-                "conversants": [],
-            }
-            ## assign name based on dm or text channel
+
+                        ## assign name based on dm or text channel
             if message.channel.type[0] == "text":
-                self.conversations[conversation_id]["name"] = str(message.channel.name)
+                connversation_name = str(message.channel.name)
             elif message.channel.type[0] == "private":
-                self.conversations[conversation_id]["name"] = str(message.author.name)
+                connversation_name = str(message.author.name)
             else:
                 return await message.channel.send(
                     "Unknown channel type. Unable to proceed. Please contact administrator"
                 )
+            
+            self.conversation =[]
+
+            self.conversations[conversation_id] = Conversation(conversation_id, connversation_name, self.conversation, [])
+
 
         # load conversation from history
-        self.conversation = self.conversations[conversation_id]["conversation"]
+        self.conversation = self.conversations[conversation_id].chatlog
 
         # keep track of who sends messages
         author = message.author.name
-        if author not in self.conversations[conversation_id]["conversants"]:
-            self.conversations[conversation_id]["conversants"].append(author)
+        if author not in self.conversations[conversation_id].conversants:
+            self.conversations[conversation_id].conversants.append(author)
 
 
         if message.content.startswith("/"): ##admin commands
@@ -156,16 +158,16 @@ class Faebot(discord.Client):
             reply = "I don't know what to say"
             logging.info("clearing self.conversation")
             self.conversation = []
-            self.conversations[conversation_id]["conversation"] = self.conversation
+            self.conversations[conversation_id].chatlog = self.conversation
             return await message.channel.send(reply)
 
         # log the conversation, append faebot's generated reply
         logging.info(f"sending reply: '{reply}' \n and logging into conversation")
         self.conversation.append(f"{author}: {message.content}")
         self.conversation.append(f"faebot: {reply}")
-        self.conversations[conversation_id]["conversation"] = self.conversation
+        self.conversations[conversation_id].chatlog= self.conversation
         logging.info(
-            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
+            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id].conversants)} conversants."
             f"\nthere are currently {len(self.conversations.items())} conversations in memory"
         )
 
@@ -199,7 +201,8 @@ class Faebot(discord.Client):
         response = "".join(output)
         return response
     
-    ###### Admin commands ##########
+    ###### Admin commands #####################################################################
+    ###########################################################################################
     async def execute_admin_command(self, message):
          ##tokenize the message
         message_tokens = message.content.split(" ")
@@ -210,11 +213,11 @@ class Faebot(discord.Client):
                 for x in self.conversations.keys():
                     reply = (
                         reply
-                        + str(self.conversations[x]["id"])
+                        + str(self.conversations[x].id)
                         + " - "
-                        + str(self.conversations[x]["name"])
+                        + str(self.conversations[x].channel)
                         + " - "
-                        + str(len(self.conversations[x]["conversation"]))
+                        + str(len(self.conversations[x].chatlog))
                         + "\n"
                     )
                 return await message.channel.send(reply)
