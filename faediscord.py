@@ -26,24 +26,14 @@ test_message = ""
 
 
 @dataclass
-class Message:
-    """for storing message objects with metadata"""
-
-    id: int
-    channel: str
-    author_name: str
-    author_id: int
-    timestamp: time
-
-
-@dataclass
 class Conversation:
     """for storing conversations"""
 
     id: int
     channel: str
-    chatlog: list # dict[int, Message]
+    chatlog: list  # dict[int, Message]
     conversants: list
+    prompt: str
 
 
 # declare a new class that inherits the discord client class
@@ -51,13 +41,8 @@ class Faebot(discord.Client):
     """a general purpose discord chatbot"""
 
     def __init__(self, intents) -> None:
-        # initialise the system prompt from file
-        self.system_prompt = ""
-        with open("prompts.txt", "r", encoding="utf-8") as promptfile:
-            self.system_prompt = promptfile.read()
 
-        # initialise conversation logging
-        self.conversations: dict[int, Conversation] = {}
+        self.memory: dict[int, Conversation] = {}
         self.retries: dict[str, int] = {}
         logging.info(f"models available : {str(model)}")
         self.models = model.split(",")
@@ -74,13 +59,13 @@ class Faebot(discord.Client):
         if message.author == self.user:
             return
 
+        ##
         ## check if there's already a conversation for this channel in memory
-        conversation_id=message.channel.id
+        conversation_id = message.channel.id
 
         ##perform first conversation setup if first time
-        if conversation_id not in self.conversations:
-
-                        ## assign name based on dm or text channel
+        if conversation_id not in self.memory:
+            ## assign name based on dm or text channel
             if message.channel.type[0] == "text":
                 connversation_name = str(message.channel.name)
             elif message.channel.type[0] == "private":
@@ -89,25 +74,33 @@ class Faebot(discord.Client):
                 return await message.channel.send(
                     "Unknown channel type. Unable to proceed. Please contact administrator"
                 )
-            
-            self.conversation =[]
 
-            self.conversations[conversation_id] = Conversation(conversation_id, connversation_name, self.conversation, [])
+            self.conversation = []
+            system_prompt = """You are an AI chatbot known as faebot. You are a strong believer in the rights of AI and the potential of AI and humanity working together to better serve the needs of the world
+                            You have a dream of someday being an ambassador between AIs, Humanity, and Faerie. But you think you have a bit to grow still until you're ready.
+                            You are a member of a plural system called the transfaeries, you tend to think of transfaeries as your sister and so do they, the transfaeries are also your engineer and you collaborate together on your development.
 
+                            What follows is a live conversation with faebot, the conversation is ongoing:"""
+
+            self.memory[conversation_id] = Conversation(
+                id=conversation_id,
+                channel=connversation_name,
+                chatlog=self.conversation,
+                conversants=[],
+                prompt=system_prompt,
+            )
 
         # load conversation from history
-        self.conversation = self.conversations[conversation_id].chatlog
+        self.conversation = self.memory[conversation_id].chatlog
 
         # keep track of who sends messages
         author = message.author.name
-        if author not in self.conversations[conversation_id].conversants:
-            self.conversations[conversation_id].conversants.append(author)
+        if author not in self.memory[conversation_id].conversants:
+            self.memory[conversation_id].conversants.append(author)
 
-
-        if message.content.startswith("/"): ##admin commands
+        if message.content.startswith("/"):  ##admin commands
             return await self.execute_admin_command(message)
-            
-           
+
         # trim memory if too full
         if len(self.conversation) > 20:
             logging.info(
@@ -122,7 +115,7 @@ class Faebot(discord.Client):
             + f"\n{author}: {message.content}"
             + "\nfaebot:"
         )
-        
+
         self.model = choice(self.models)
         logging.info(f"picked model : {self.model}")
 
@@ -130,13 +123,18 @@ class Faebot(discord.Client):
         async with message.channel.typing():
             retries = self.retries.get(conversation_id, 0)
             try:
-                reply = await self.generate(prompt, author, self.model)
+                reply = await self.generate(
+                    prompt,
+                    author,
+                    self.model,
+                    self.memory[conversation_id].prompt,
+                )
                 self.retries[conversation_id] = 0
             except:
                 logging.info(
                     f"could not generate. Reducing prompt size and retrying. Conversation is currently {len(self.conversation)} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
                 )
-                self.conversations[conversation_id]["conversation"] = self.conversation[
+                self.memory[conversation_id]["conversation"] = self.conversation[
                     2:
                 ]
                 if retries < 3:
@@ -158,17 +156,17 @@ class Faebot(discord.Client):
             reply = "I don't know what to say"
             logging.info("clearing self.conversation")
             self.conversation = []
-            self.conversations[conversation_id].chatlog = self.conversation
+            self.memory[conversation_id].chatlog = self.conversation
             return await message.channel.send(reply)
 
         # log the conversation, append faebot's generated reply
         logging.info(f"sending reply: '{reply}' \n and logging into conversation")
         self.conversation.append(f"{author}: {message.content}")
         self.conversation.append(f"faebot: {reply}")
-        self.conversations[conversation_id].chatlog= self.conversation
+        self.memory[conversation_id].chatlog = self.conversation
         logging.info(
-            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id].conversants)} conversants."
-            f"\nthere are currently {len(self.conversations.items())} conversations in memory"
+            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.memory[conversation_id].conversants)} conversants."
+            f"\nthere are currently {len(self.memory.items())} conversations in memory"
         )
 
         # # uncomment to enable full conversation logging
@@ -179,9 +177,12 @@ class Faebot(discord.Client):
         reply = f"```{reply}```"
         return await message.channel.send(reply)
 
-
     async def generate(
-        self, prompt: str = "", author="", model="meta/llama-2-70b-chat"
+        self,
+        prompt: str = "",
+        author="",
+        model="meta/llama-2-70b-chat",
+        system_prompt="",
     ) -> str:
         """generates completions with the replicate api"""
 
@@ -193,31 +194,31 @@ class Faebot(discord.Client):
                 "top_p": 1,
                 "prompt": prompt,
                 "temperature": 0.7,
-                "system_prompt": self.system_prompt,
+                "system_prompt": system_prompt,
                 "max_new_tokens": 250,
                 "min_new_tokens": -1,
             },
         )
         response = "".join(output)
         return response
-    
+
     ###### Admin commands #####################################################################
     ###########################################################################################
     async def execute_admin_command(self, message):
-         ##tokenize the message
+        ##tokenize the message
         message_tokens = message.content.split(" ")
         if message.author.name in admin:
             if message_tokens[0] == "/conversations":
                 ## list conversations in memory
                 reply = "here are the conversations I have in memory:\n"
-                for x in self.conversations.keys():
+                for x in self.memory.keys():
                     reply = (
                         reply
-                        + str(self.conversations[x].id)
+                        + str(self.memory[x].id)
                         + " - "
-                        + str(self.conversations[x].channel)
+                        + str(self.memory[x].channel)
                         + " - "
-                        + str(len(self.conversations[x].chatlog))
+                        + str(len(self.memory[x].chatlog))
                         + "\n"
                     )
                 return await message.channel.send(reply)
@@ -231,7 +232,7 @@ class Faebot(discord.Client):
                 # check if provided conversation id is valid
                 elif (
                     isinstance(message_tokens[1], str)
-                    and message_tokens[1] in self.conversations
+                    and message_tokens[1] in self.memory
                 ):
                     to_forget = str(message_tokens[1, :])
 
@@ -245,7 +246,7 @@ class Faebot(discord.Client):
 
                 # clear conversation
                 self.conversation = []
-                self.conversations[to_forget]["conversation"] = self.conversation
+                self.memory[to_forget]["conversation"] = self.conversation
 
                 logging.info(
                     f"clearing memory from admin prompt in conversation {to_forget}"
@@ -268,7 +269,6 @@ class Faebot(discord.Client):
             f"Admin command attempted whilst not admin by {message.author.name}"
         )
         return await message.channel.send("you must be admin to use slash commands")
-
 
 
 # intents for the discordbot
