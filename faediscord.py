@@ -41,7 +41,6 @@ class Faebot(discord.Client):
     """a general purpose discord chatbot"""
 
     def __init__(self, intents) -> None:
-
         self.memory: dict[int, Conversation] = {}
         self.retries: dict[str, int] = {}
         logging.info(f"models available : {str(model)}")
@@ -59,7 +58,13 @@ class Faebot(discord.Client):
         if message.author == self.user:
             return
 
-        ##
+        # check for command
+        if message.content.startswith("/"):  ##admin commands
+            return await self.execute_command(message)
+
+        # send message in for processing
+        return await self.process_message(message)
+
         ## check if there's already a conversation for this channel in memory
         conversation_id = message.channel.id
 
@@ -99,7 +104,7 @@ class Faebot(discord.Client):
             self.memory[conversation_id].conversants.append(author)
 
         if message.content.startswith("/"):  ##admin commands
-            return await self.execute_admin_command(message)
+            return await self.execute_command(message)
 
         # trim memory if too full
         if len(self.conversation) > 20:
@@ -134,9 +139,7 @@ class Faebot(discord.Client):
                 logging.info(
                     f"could not generate. Reducing prompt size and retrying. Conversation is currently {len(self.conversation)} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
                 )
-                self.memory[conversation_id]["conversation"] = self.conversation[
-                    2:
-                ]
+                self.memory[conversation_id]["conversation"] = self.conversation[2:]
                 if retries < 3:
                     await asyncio.sleep(retries * 1000)
                     self.retries[conversation_id] = retries + 1
@@ -177,6 +180,9 @@ class Faebot(discord.Client):
         reply = f"```{reply}```"
         return await message.channel.send(reply)
 
+    async def process_message(self, message):
+        return
+
     async def generate(
         self,
         prompt: str = "",
@@ -202,11 +208,39 @@ class Faebot(discord.Client):
         response = "".join(output)
         return response
 
-    ###### Admin commands #####################################################################
-    ###########################################################################################
-    async def execute_admin_command(self, message):
+    ###### Admin commands ###################
+    async def execute_command(self, message):
         ##tokenize the message
         message_tokens = message.content.split(" ")
+        command = message_tokens[0]
+
+        ####### Commands anyone can execute
+        if command == "/help":
+            reply = """ Faebot will reply to messages sometimes. If you want faer input you can @ faer or reply to faer"""
+            return await message.reply(reply)
+
+        if command == "/ping":
+            return await message.reply("pong " + " ".join(message_tokens[1:]))
+
+        if command == "/prompt":
+            # return system prompt
+            return await message.reply(
+                f"this is the current system prompt: \n {self.system_prompt}"
+            )
+
+        ##commands where you must be admin or in a DM to execute
+
+        if command == "/editprompt":
+            return
+            #     self.system_prompt = " ".join(message_tokens[1:])
+            #     logging.info(f"system prompt updated to: \n{self.system_prompt}")
+            #     return await message.channel.send("system prompt edited")
+            # else:
+            #     logging.info(f"command not known {message.content}")
+            #     return await message.channel.send(
+            #         f"failed to recognise command {message.content}"
+            #     )
+
         if message.author.name in admin:
             if message_tokens[0] == "/conversations":
                 ## list conversations in memory
@@ -222,6 +256,7 @@ class Faebot(discord.Client):
                         + "\n"
                     )
                 return await message.channel.send(reply)
+
             if message_tokens[0] == "/forget":
                 # check if conversation id was provided
                 if len(message_tokens) < 2:
@@ -253,16 +288,6 @@ class Faebot(discord.Client):
                 )
                 return await message.channel.send(
                     f"cleared conversation {to_forget}"  # - {self.conversations[message_tokens[1]['name']]}"
-                )
-            if message_tokens[0] == "/prompt":
-                # allows live editing of the system prompt
-                self.system_prompt = " ".join(message_tokens[1:])
-                logging.info(f"system prompt updated to: \n{self.system_prompt}")
-                return await message.channel.send("system prompt edited")
-            else:
-                logging.info(f"command not known {message.content}")
-                return await message.channel.send(
-                    f"failed to recognise command {message.content}"
                 )
 
         logging.info(
