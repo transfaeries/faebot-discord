@@ -3,7 +3,7 @@
 
 import os
 import logging
-import time
+import datetime
 from typing import Any
 import asyncio
 from random import choice
@@ -26,12 +26,19 @@ test_message = ""
 
 
 @dataclass
+class Message:
+    author: str
+    content: str
+    timestamp: datetime
+
+
+@dataclass
 class Conversation:
     """for storing conversations"""
 
     id: int
     channel: str
-    chatlog: list  # dict[int, Message]
+    chatlog: list[Message]  # dict[int, Message]
     conversants: list
     prompt: str
 
@@ -62,8 +69,8 @@ class Faebot(discord.Client):
         if message.content.startswith("/"):  ##admin commands
             return await self.execute_command(message)
 
-        # send message in for processing
-        return await self.process_message(message)
+        # # send message in for processing
+        # return await self.process_message(message)
 
         ## check if there's already a conversation for this channel in memory
         conversation_id = message.channel.id
@@ -116,10 +123,13 @@ class Faebot(discord.Client):
         # populate prompt with conversation history
 
         prompt = (
-            "\n".join(self.conversation)
+            "\n".join([message.content for message in self.conversation])
             + f"\n{author}: {message.content}"
             + "\nfaebot:"
         )
+        import pdb
+
+        pdb.set_trace()
 
         self.model = choice(self.models)
         logging.info(f"picked model : {self.model}")
@@ -164,8 +174,10 @@ class Faebot(discord.Client):
 
         # log the conversation, append faebot's generated reply
         logging.info(f"sending reply: '{reply}' \n and logging into conversation")
-        self.conversation.append(f"{author}: {message.content}")
-        self.conversation.append(f"faebot: {reply}")
+        to_store = Message(author, f"{author}: {message.content}", message.timestamp)
+        self.conversation.append(to_store)
+        to_store = Message("faebot", f"faebot: {reply}", message.timestamp)
+        self.conversation.append(to_store)
         self.memory[conversation_id].chatlog = self.conversation
         logging.info(
             f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.memory[conversation_id].conversants)} conversants."
@@ -177,11 +189,11 @@ class Faebot(discord.Client):
             logging.info(line)
 
         # sends faebot's message with faer pattented quirk
-        reply = f"```{reply}```"
+        # reply = f"```{reply"
         return await message.channel.send(reply)
 
-    async def process_message(self, message):
-        return
+    # async def process_message(self, message):
+    #     return
 
     async def generate(
         self,
