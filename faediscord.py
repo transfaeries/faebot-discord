@@ -163,7 +163,8 @@ class Faebot(discord.Client):
         async with message.channel.typing():
             retries = self.retries.get(conversation_id, 0)
             try:
-                reply = self.generate(prompt, author, self.model)
+                # import pdb;pdb.set_trace()
+                reply = await self.generate(prompt, author, self.model, system_prompt=INITIAL_PROMPT)
                 self.retries[conversation_id] = 0
             except:
                 logging.info(
@@ -212,40 +213,32 @@ class Faebot(discord.Client):
         reply = f"```{reply}```"
         return await message.channel.send(reply)
 
-    # async def
-
-    def generate(
-        self, prompt: str = "", author="", model="meta/llama-2-70b-chat"
+    async def generate(
+        self,
+        prompt: str = "",
+        author="",
+        model=model,
+        system_prompt="",
+        params={"top_k": 75, "top_p": 1, "temperature": 1.25, "seed": 666},
     ) -> str:
-        """generates completions with the OpenAI api"""
+        """generates completions with the replicate api"""
 
-        output = replicate.run(
+        output = await replicate.async_run(
             model,
             input={
                 "debug": False,
-                "top_k": 50,
-                "top_p": 1,
+                "top_k": params["top_k"],
+                "top_p": params["top_p"],
                 "prompt": prompt,
-                "temperature": 0.7,
-                "system_prompt": INITIAL_PROMPT,
-                "max_new_tokens": 250,
+                "temperature": params["temperature"],
+                "system_prompt": system_prompt,
+                "max_new_tokens": 150,
                 "min_new_tokens": -1,
+                "seed": params["seed"],
             },
         )
         response = "".join(output)
         return response
-
-        # response = client.Completion.create(  # type: ignore
-        #     engine=engine,
-        #     prompt=prompt,
-        #     temperature=0.7,
-        #     max_tokens=512,
-        #     top_p=1,
-        #     frequency_penalty=0.99,
-        #     presence_penalty=0.3,
-        #     stop=["\n", author + ":", "faebot:"],
-        # )
-        # return response["choices"][0]["text"].strip()
 
 
 # intents for the discordbot
