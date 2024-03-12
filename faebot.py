@@ -34,11 +34,15 @@ class Conversation:
     server_id: int
     channel: str
     channel_id: int
-    conversants: list
-    prompt: str
+    conversants: list = field(default_factory=list)
     is_dm: bool
-    retries: int  # for back-off
-    chatlog: list[ChatMessage]  # dict[int, Message]
+    chatlog: list[ChatMessage]  
+    system_prompt: str = ""
+    frequency: int = 10
+    history: int = 5
+    model: str = MODEL
+    silenced: bool = False
+    active: bool = False
 
 
 # declare a new class that inherits the discord client class
@@ -64,9 +68,13 @@ class Faebot(discord.Client):
         if message.author == self.user:
             return
         
+        is message.channel
+        
         # # import pdb;pdb.set_trace()
         # await message.add_reaction("<:cuteplane:880054020939579442>")
         # return await message.channel.send(f"messaged created at {message.created_at}")
+
+        
 
 # intents for the discordbot
 intents = discord.Intents.default()
