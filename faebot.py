@@ -1,3 +1,4 @@
+from functools import wraps
 import os
 import logging
 import datetime
@@ -5,8 +6,12 @@ from typing import Any
 import asyncio
 from random import choice
 import discord
+from discord.ext import commands
 import replicate
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+ADMIN = os.getenv("ADMIN", "")
+ADMIN_LIST = [int(x) for x in ADMIN.split(",")]
 
 
 # set up logging
@@ -22,7 +27,8 @@ class ChatMessage:
     content: str
     timestamp: datetime
     message_object: discord.Message
-    # reactions: dict
+    reactions: dict
+    params: dict 
 
 
 @dataclass
@@ -34,53 +40,106 @@ class Conversation:
     server_id: int
     channel: str
     channel_id: int
-    conversants: list = field(default_factory=list)
     is_dm: bool
-    chatlog: list[ChatMessage]  
+    channel_admins: list[int] = field(default_factory=list)
+    chatlog: list[ChatMessage] = field(default_factory=list)
+    conversants: list = field(default_factory=list) 
     system_prompt: str = ""
     frequency: int = 10
-    history: int = 5
-    model: str = MODEL
+    history: int = 20
+    model: str = "meta/llama-13b-chat"
     silenced: bool = False
-    active: bool = False
+    active: bool = True
 
 
 # declare a new class that inherits the discord client class
-class Faebot(discord.Client):
+class Faebot(commands.Bot):
     """a general purpose discord chatbot"""
 
-    def __init__(self, intents) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         ## create a local memory holder
-        self.memory: dict[int, Conversation] = {}
+        self.conversations: dict[int, Conversation] = {}
 
-        super().__init__(intents=intents)
+        super().__init__(*args, **kwargs)
 
     async def on_ready(self):
         """runs when bot is ready"""
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
 
-    async def on_message(self, message):
+    async def on_message(self, message: discord.Message):
         """Handles what happens when the bot receives a message"""
 
-        # Every Message that faebot sees should be logged for faer memory, but not every message will be replied to.
-        # Commands should be logged as special messages that are not part of the conversation.
+        # handle commands 
+        await super().on_message(message)
+
+        # don't reply to ourselves
         if message.author == self.user:
             return
         
-        is message.channel
+
+        if message.channel.id in self.conversations.keys():
+            if self.conversations[message.channel.id].active:
+                return await self.process_message(message)
+            return
         
-        # # import pdb;pdb.set_trace()
-        # await message.add_reaction("<:cuteplane:880054020939579442>")
-        # return await message.channel.send(f"messaged created at {message.created_at}")
+        if message.channel.type.name == "private":
+            return await self.initiate_dm(message)
+        return
+    
+    async def process_message(self,message: discord.Message):
+        logging.info(f"processing message {message.id}")
+        pass
+
+    async def initiate_dm(self, message:discord.Message):
+        logging.info(f"processing dm {message.channel.id}")
+        # import pdb;pdb.set_trace()
+        self.conversations[message.channel.id] = Conversation(
+            id= message.channel.id,
+            server=message.author.global_name,
+            server_id=message.author.id,
+            channel=message.author.global_name,
+            channel_id=message.channel.id,
+            is_dm=True,
+            channel_admins=[message.author.id],
+            frequency=1
+        )
+        logging.info(f"added conversation: {self.conversations[message.channel.id]}")
+        return await self.process_message(message)    
 
         
 
-# intents for the discordbot
+# set up bot 
+description = "A bot who is also a faerie"
 intents = discord.Intents.default()
+intents.members = True
 intents.message_content = True
+faebot = Faebot(command_prefix="fae;",description=description, intents=intents)
 
-# instantiate and run the bot
-client = Faebot(intents=intents)
-client.run(os.environ["DISCORD_TOKEN"])
+## commands for everyone:
+
+@faebot.command()
+async def hello(ctx: commands.Context):
+    """Displays default help text"""
+    return await ctx.send("Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'")
+    # await ctx.send("Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'")
+
+##commands for admins
+def requires_admin(command: commands.command) -> commands.command:
+    @wraps(command)
+    async def admin_command(ctx: commands.Context):
+        if ctx.author.id in ADMIN_LIST:
+            return await command(ctx)
+        return await ctx.reply("you must be an admin to use this command")
+
+    return admin_command
+
+
+@faebot.command()
+@requires_admin
+async def join(ctx: commands.Context):
+    return await ctx.send("valid use of join")
+
+
+faebot.run(os.environ["DISCORD_TOKEN"])
 
