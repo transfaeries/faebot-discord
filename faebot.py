@@ -25,7 +25,7 @@ logging.basicConfig(
 class ChatMessage:
     author: str
     content: str
-    timestamp: datetime
+    timestamp: datetime.time
     message_object: discord.Message
     reactions: dict
     params: dict 
@@ -122,8 +122,7 @@ faebot = Faebot(command_prefix="fae;",description=description, intents=intents)
 async def hello(ctx: commands.Context):
     """Displays default help text"""
     return await ctx.send("Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'")
-    # await ctx.send("Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'")
-
+    
 ##commands for admins
 def requires_admin(command: commands.command) -> commands.command:
     @wraps(command)
