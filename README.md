@@ -38,7 +38,7 @@ poetry install
 You'll need to set the following secrets as environment variables:
 ```bash
 REPLICATE_API_TOKEN= ## from replicate.com
-MODEL_NAME=meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3,meta/llama-2-13b-chat:f4e2de70d66816a838a89eeeb621910adffb0dd0baba3976c96980970978018d ## multiple models are supported and the bot will shuffle between them. 
+MODEL_NAME=meta/meta-llama-3-70b-chat ## multiple models are supported and the bot will shuffle between them. 
 DISCORD_TOKEN=XXXXX... ## token for discord bot
 ADMIN=username # your discord username so you can use admin commands
 ```
