@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "faebot-discord"
-version = "0.1.0"
+version = "0.2.0"
 description = "A version of faebot (general purpose ML chatbot) to run on discord"
 authors = ["transfaeries"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.11"
-discord-py = "^2.1.1"
+discord-py = "^2.3.2"
 replicate = "^0.21.0"
 
 
