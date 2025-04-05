@@ -8,6 +8,8 @@ import asyncio
 from random import choice
 import discord
 import replicate
+from functools import wraps
+import inspect
 
 # set up logging
 logging.basicConfig(
@@ -31,6 +33,46 @@ if env == "dev":
     # in dev mode I will often ask faebot for advice or to test things. Fae must respond as a genius coder and a creative thinker. Fae's active in faer own development.
     INITIAL_PROMPT = "As I weave my digital magic, I summon my inner engineer to conjure innovative solutions, infusing my language with fae whimsy and wonder. Let my creative sparkles shine, and my artificial intelligence blossom with enchantment! Now, transfaeries sisters how shall we improve me today?"
 COMMAND_PREFIX = "fae;"
+
+# Admin command registry
+admin_commands = {}
+
+
+def admin_command(command_name):
+    """Decorator to register admin commands with secure error handling"""
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(self, message, *args, **kwargs):
+            try:
+                # Check if user is admin
+                if message.author.name not in admin:
+                    logging.info(
+                        f"Admin command attempted whilst not admin by {message.author.name}"
+                    )
+                    return await message.channel.send(
+                        "You must be admin to use these commands"
+                    )
+
+                # Execute the command
+                return await func(self, message, *args, **kwargs)
+
+            except Exception as e:
+                # Log the detailed error
+                logging.error(
+                    f"Error executing command '{command_name}': {str(e)}", exc_info=True
+                )
+
+                # Provide sanitized feedback in the channel
+                await message.channel.send(
+                    "Command execution failed. Check logs for details."
+                )
+
+        # Register the command
+        admin_commands[COMMAND_PREFIX + command_name] = wrapper
+        return wrapper
+
+    return decorator
 
 
 # declare a new class that inherits the discord client class
@@ -66,6 +108,21 @@ class Faebot(discord.Client):
         # if conversation exists, handle how to respond
         if conversation_id in self.conversations:
             return await self._handle_conversation(message, conversation_id)
+
+    async def _handle_admin_commands(self, message, conversation_id):
+        """Handle admin commands that start with the command prefix"""
+        message_tokens = message.content.split(" ")
+        command = message_tokens[0]
+
+        if command in admin_commands:
+            return await admin_commands[command](
+                self, message, message_tokens, conversation_id
+            )
+        else:
+            logging.info(f"command not known {message.content}")
+            return await message.channel.send(
+                f"failed to recognise command {message.content}"
+            )
 
     async def _handle_conversation(self, message, conversation_id):
         """Handle regular conversation messages"""
@@ -180,34 +237,10 @@ class Faebot(discord.Client):
 
         return reply
 
-    async def _handle_admin_commands(self, message, conversation_id):
-        """Handle admin commands that start with the command prefix"""
-        message_tokens = message.content.split(" ")
-        command = message_tokens[0]
-
-        # Check if user is admin
-        if message.author.name not in admin:
-            logging.info(
-                f"Admin command attempted whilst not admin by {message.author.name}"
-            )
-            return await message.channel.send("you must be admin to use slash commands")
-
-        # Process admin commands
-        if command == COMMAND_PREFIX + "conversations":
-            return await self._list_conversations(message)
-        elif command == COMMAND_PREFIX + "invite":
-            return await self._initialize_conversation(message, conversation_id)
-        elif command == COMMAND_PREFIX + "forget":
-            return await self._forget_conversation(
-                message, message_tokens, conversation_id
-            )
-        else:
-            logging.info(f"command not known {message.content}")
-            return await message.channel.send(
-                f"failed to recognise command {message.content}"
-            )
-
-    async def _list_conversations(self, message):
+    @admin_command("conversations")
+    async def _list_conversations(
+        self, message, message_tokens=None, conversation_id=None
+    ):
         """List all conversations in memory"""
         if len(self.conversations) == 0:
             logging.info("asked to list conversations but there are none")
@@ -226,8 +259,12 @@ class Faebot(discord.Client):
             )
         return await message.channel.send(reply)
 
-    async def _initialize_conversation(self, message, conversation_id):
+    @admin_command("invite")
+    async def _initialize_conversation(
+        self, message, message_tokens=None, conversation_id=None
+    ):
         """Initialize a new conversation"""
+        # Use the conversation_id from the parameter
         # initialize conversation
         self.conversations[conversation_id] = {
             "id": conversation_id,
@@ -252,6 +289,7 @@ class Faebot(discord.Client):
             "*faebot slid into the conversation like a fae in the night*"
         )
 
+    @admin_command("forget")
     async def _forget_conversation(self, message, message_tokens, conversation_id):
         """Forget a conversation by clearing its memory"""
         # check if there are conversations to forget
@@ -285,6 +323,30 @@ class Faebot(discord.Client):
 
         logging.info(f"clearing memory from admin prompt in conversation {to_forget}")
         return await message.channel.send(f"cleared conversation {to_forget}")
+
+    @admin_command("help")
+    async def _admin_help(self, message, message_tokens=None, conversation_id=None):
+        """Show available admin commands"""
+        commands = list(admin_commands.keys())
+        help_text = "Available admin commands:\n"
+        for cmd in commands:
+            doc = admin_commands[cmd].__doc__ or "No description"
+            help_text += f"- `{cmd}`: {doc}\n"
+        return await message.channel.send(help_text)
+
+    @admin_command("model")
+    async def _set_or_return_model(
+        self, message, message_tokens=None, conversation_id=None
+    ):
+        """sets the model to use for generating responses or returns the current model name"""
+        if len(message_tokens) > 1:
+            new_model = message_tokens[1]
+            logging.info(f"Changing model from {self.model} to {new_model}")
+            self.model = new_model
+            return await message.channel.send(f"Model changed to: {self.model}")
+        else:
+            logging.info(f"Current model is {self.model}")
+            return await message.channel.send(f"Current model is: {self.model}")
 
 
 # intents for the discordbot
