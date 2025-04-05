@@ -1,0 +1,23 @@
+#!/bin/bash
+set -e
+
+# Format Python files that are staged for commit
+FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.py$')
+
+if [ -n "$FILES" ]; then
+  echo "Running Black formatter on staged Python files..."
+  
+  # Run Black in check mode first to see if it would make changes
+  if ! poetry run black --check $FILES > /dev/null 2>&1; then
+    echo "Black would make changes to the following files:"
+    poetry run black --check $FILES
+    echo "Running Black to format the files..."
+    poetry run black $FILES
+    echo "Files have been formatted. Please review the changes and stage them before committing."
+    exit 1
+  else
+    echo "All Python files are properly formatted!"
+  fi
+fi
+
+exit 0
