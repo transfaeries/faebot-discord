@@ -46,7 +46,7 @@ def admin_command(command_name):
         async def wrapper(self, message, *args, **kwargs):
             try:
                 # Check if user is admin
-                if message.author.name not in admin.split(","):
+                if message.author.name not in [name.strip() for name in admin.split(",")]:
                     logging.info(
                         f"Admin command attempted whilst not admin by {message.author.name}"
                     )
