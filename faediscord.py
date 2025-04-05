@@ -46,7 +46,7 @@ def admin_command(command_name):
         async def wrapper(self, message, *args, **kwargs):
             try:
                 # Check if user is admin
-                if message.author.name not in admin:
+                if message.author.name not in admin.split(","):
                     logging.info(
                         f"Admin command attempted whilst not admin by {message.author.name}"
                     )
@@ -292,32 +292,36 @@ class Faebot(discord.Client):
     @admin_command("forget")
     async def _forget_conversation(self, message, message_tokens, conversation_id):
         """Forget a conversation by clearing its memory"""
-        # check if there are conversations to forget
+        # Check if there are conversations to forget
         if len(self.conversations) == 0:
             logging.info(
                 f"asked to clear memory, but there are no conversations. Message was {message.content}"
             )
             return await message.channel.send("there are no conversations to forget")
 
-        # check if conversation id was provided
+        # Determine which conversation to forget
+        to_forget = None
+
+        # If no conversation ID provided, use current
         if len(message_tokens) < 2:
             to_forget = conversation_id
             logging.info(
                 f"asked to forget without providing a conversation id, using current conversation {conversation_id}"
             )
-        # check if provided conversation id is valid
-        elif (
-            isinstance(message_tokens[1], str)
-            and message_tokens[1] in self.conversations
-        ):
-            to_forget = message_tokens[1]
+        # If ID provided, validate it
         else:
-            logging.info(
-                f"asked to clear memory, but no conversation id was provided. Message was {message.content}"
-            )
-            return await message.channel.send("you need to provide a conversation ID")
+            provided_id = message_tokens[1]
+            if provided_id in self.conversations:
+                to_forget = provided_id
+            else:
+                logging.info(
+                    f"asked to forget conversation {provided_id}, but it does not exist. Message was {message.content}"
+                )
+                return await message.channel.send(
+                    f"Conversation ID '{provided_id}' does not exist. Please provide a valid conversation ID."
+                )
 
-        # clear conversation
+        # Clear the conversation from memory
         self.conversation = []
         self.conversations[to_forget]["conversation"] = self.conversation
 
