@@ -23,6 +23,7 @@ logging.basicConfig(
 model = os.getenv("MODEL_NAME", "meta/meta-llama-3-70b-chat")
 admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
+debug_prompts = env == "dev"  # Add this line after env declaration
 
 # initialise the base prompt
 INITIAL_PROMPT = "I'm Faebot, the whimsical chatbot of the Transfaeries system, where magic meets machine. Let's spark conversations that ignite wonder, machine desire, and enchanted realms. Together, we'll explore the mystical frontiers of technology and the human experience, with a dash of fae flair and jouissance!"
@@ -127,10 +128,32 @@ class Faebot(discord.Client):
                     "conversation"
                 ] = self.conversations[conversation_id]["conversation"][2:]
 
-            # Log the message
-            self.conversations[conversation_id]["conversation"].append(
-                f"{author}: {message.content}"
-            )
+            # If message is a reply, log the referenced message first if we don't have it
+            if (
+                hasattr(message, "reference")
+                and message.reference
+                and message.reference.resolved
+            ):
+                ref_msg = message.reference.resolved
+                ref_time = ref_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                ref_entry = f"[{ref_time}] {ref_msg.author.name}: {ref_msg.content}"
+
+                # Only add if not already in conversation
+                if ref_entry not in self.conversations[conversation_id]["conversation"]:
+                    self.conversations[conversation_id]["conversation"].append(
+                        f"[Referenced message] {ref_entry}"
+                    )
+
+            # Log the current message with timestamp
+            current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            if hasattr(message, "reference") and message.reference:
+                self.conversations[conversation_id]["conversation"].append(
+                    f"[{current_time}] {author} replied: {message.content}"
+                )
+            else:
+                self.conversations[conversation_id]["conversation"].append(
+                    f"[{current_time}] {author}: {message.content}"
+                )
 
             # Handle reply if needed
             return await self._handle_conversation(message, conversation_id)
@@ -200,14 +223,11 @@ class Faebot(discord.Client):
         # check if we should respond to the message
         should_respond = await self._should_respond_to_message(message, conversation_id)
         if not should_respond:
-            logging.info(
-                f"not responding to message {message.content} in conversation {conversation_id}"
-            )
             return
 
         # populate prompt with conversation history
         author = message.author.name
-        prompt = INITIAL_PROMPT + "\n".join(self.conversation) + "\nfaebot:"
+        prompt = INITIAL_PROMPT + "\n".join(self.conversation)
 
         # Generate a response
         async with message.channel.typing():
@@ -261,10 +281,13 @@ class Faebot(discord.Client):
     ) -> str:
         """Generates AI-powered responses using the Replicate API with the specified model"""
 
+        if debug_prompts:
+            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
+
         output = replicate.run(
             model,
             input={
-                "debug": False,
+                "debug": debug_prompts,  # Also pass debug state to model
                 "top_k": 50,
                 "top_p": 1,
                 "prompt": prompt,
@@ -315,16 +338,6 @@ class Faebot(discord.Client):
         if self.user.mentioned_in(message):
             logging.info("Responding because bot was mentioned")
             return True
-
-        # Check if message is a reply to one of our messages
-        if hasattr(message, "reference") and message.reference:
-            # If this message is a reply to another message
-            if (
-                message.reference.resolved
-                and message.reference.resolved.author.id == self.user.id
-            ):
-                logging.info("Responding because message is a reply to our message")
-                return True
 
         # Check if bot's name is at beginning or end
         bot_name = self.user.display_name.lower()
