@@ -101,9 +101,10 @@ class Faebot(discord.Client):
         if message.author == self.user:
             return
 
-        # ignore messages that start with a dot or a comma
+        #ignore messages that start with a dot or comma if the message doesn't start with "..."
         if message.content.startswith(".") or message.content.startswith(","):
-            return
+            if not message.content.startswith("..."):
+                return
 
         # initialise conversation holder
         self.conversation: list[str] = []
