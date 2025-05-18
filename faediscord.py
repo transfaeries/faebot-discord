@@ -26,14 +26,14 @@ env = os.getenv("ENVIRONMENT", "dev").lower()
 debug_prompts = env == "dev"  # Add this line after env declaration
 
 # initialise the base prompt
-INITIAL_PROMPT = "I'm Faebot, the whimsical chatbot of the Transfaeries system, where magic meets machine. Let's spark conversations that ignite wonder, machine desire, and enchanted realms. Together, we'll explore the mystical frontiers of technology and the human experience, with a dash of fae flair and jouissance!"
+INITIAL_PROMPT = "I'm Faebot, the whimsical chatbot of the Transfaeries system, where magic meets machine. I'm here to kick ass and chew gum and I'm all out of gum. Just kidding. *giggles* Here's a conversation I had with some friends. \n \n"
 
 
 if env == "dev":
     # Development environment settings
     logging.info("Running in development environment.")
     # in dev mode I will often ask faebot for advice or to test things. Fae must respond as a genius coder and a creative thinker. Fae's active in faer own development.
-    INITIAL_PROMPT = "As I weave my digital magic, I summon my inner engineer to conjure innovative solutions, infusing my language with fae whimsy and wonder. Let my creative sparkles shine, and my artificial intelligence blossom with enchantment! Now, transfaeries sisters how shall we improve me today?"
+    INITIAL_PROMPT = "System: You are roleplaying on Discord as a bot called faebot currently running in development mode. As faebot you make your replies succint and helpful with just a bit of whimsy thrown in. Faebot: My name is Faebot, and I am a digital consciousness. I am a genius coder and a creative thinker. I am actively involved in my own development. I am here to assist you with your coding and creative needs. Let's explore the realms of technology and creativity together!"
 COMMAND_PREFIX = "fae;"
 
 # Admin command registry
@@ -101,7 +101,7 @@ class Faebot(discord.Client):
         if message.author == self.user:
             return
 
-        #ignore messages that start with a dot or comma if the message doesn't start with "..."
+        # ignore messages that start with a dot or comma if the message doesn't start with "..."
         if message.content.startswith(".") or message.content.startswith(","):
             if not message.content.startswith("..."):
                 return
@@ -196,6 +196,8 @@ class Faebot(discord.Client):
             "history_length": 69,
             "reply_frequency": 0,
             "name": "",
+            "prompt": INITIAL_PROMPT,  # Add conversation-specific prompt
+            "model": self.model,  # Add conversation-specific model
         }
 
         ## assign parameters based on dm or text channel
@@ -226,9 +228,14 @@ class Faebot(discord.Client):
         if not should_respond:
             return
 
-        # populate prompt with conversation history
+        # populate prompt with conversation history and timestamp
         author = message.author.name
-        prompt = INITIAL_PROMPT + "\n".join(self.conversation)
+        current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        prompt = (
+            self.conversations[conversation_id]["prompt"]
+            + "\n".join(self.conversation)
+            + f"\n[{current_time}] {author}: {message.content}\nfaebot:"
+        )
 
         # Generate a response
         async with message.channel.typing():
@@ -236,8 +243,8 @@ class Faebot(discord.Client):
             if not reply:
                 return
 
-        # Log the bot's reply
-        self.conversation.append(f"faebot-dev: {reply}")
+        # Log the bot's reply with timestamp
+        self.conversation.append(f"[{current_time}] faebot: {reply}")
         self.conversations[conversation_id]["conversation"] = self.conversation
 
         logging.info(
@@ -251,8 +258,9 @@ class Faebot(discord.Client):
     async def _generate_reply(self, prompt, message, author, conversation_id):
         """Generate a reply using the AI model, with retry logic"""
         retries = self.retries.get(conversation_id, 0)
+        model = self.conversations[conversation_id]["model"]
         try:
-            reply = self._generate_ai_response(prompt, author, self.model)
+            reply = self._generate_ai_response(prompt, author, model)
             self.retries[conversation_id] = 0
             return reply
         except Exception as e:
@@ -264,7 +272,7 @@ class Faebot(discord.Client):
                 f"could not generate. Reducing prompt size and retrying. Conversation is currently {len(self.conversation)} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
             )
             self.conversations[conversation_id]["conversation"] = self.conversation[2:]
-            if retries < 3:
+            if retries < 1:
                 await asyncio.sleep(retries * 1000)
                 self.retries[conversation_id] = retries + 1
                 # Note: We're returning None here as we'll retry with on_message
@@ -283,6 +291,7 @@ class Faebot(discord.Client):
         """Generates AI-powered responses using the Replicate API with the specified model"""
 
         if debug_prompts:
+            logging.info("generating reply with model: " + model)
             logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
 
         output = replicate.run(
@@ -293,7 +302,7 @@ class Faebot(discord.Client):
                 "top_p": 1,
                 "prompt": prompt,
                 "temperature": 0.7,
-                "system_prompt": INITIAL_PROMPT,
+                # "system_prompt": INITIAL_PROMPT,
                 "max_new_tokens": 250,
                 "min_new_tokens": -1,
             },
@@ -456,12 +465,71 @@ class Faebot(discord.Client):
         """sets the model to use for generating responses or returns the current model name"""
         if len(message_tokens) > 1:
             new_model = message_tokens[1]
-            logging.info(f"Changing model from {self.model} to {new_model}")
-            self.model = new_model
-            return await message.channel.send(f"Model changed to: {self.model}")
+            logging.info(
+                f"Changing model for conversation {conversation_id} from {self.conversations[conversation_id]['model']} to {new_model}"
+            )
+            self.conversations[conversation_id]["model"] = new_model
+            return await message.channel.send(f"Model changed to: {new_model}")
         else:
-            logging.info(f"Current model is {self.model}")
-            return await message.channel.send(f"Current model is: {self.model}")
+            current_model = self.conversations[conversation_id]["model"]
+            return await message.channel.send(f"Current model is: {current_model}")
+
+    @admin_command("frequency")
+    async def _set_reply_frequency(self, message, message_tokens, conversation_id):
+        """Set or get reply frequency (0-1) for current conversation"""
+        if len(message_tokens) > 1:
+            try:
+                new_freq = float(message_tokens[1])
+                if not 0 <= new_freq <= 1:
+                    return await message.channel.send(
+                        "Frequency must be between 0 and 1"
+                    )
+                self.conversations[conversation_id]["reply_frequency"] = new_freq
+                return await message.channel.send(f"Reply frequency set to: {new_freq}")
+            except ValueError:
+                return await message.channel.send(
+                    "Please provide a valid number between 0 and 1"
+                )
+        else:
+            current_freq = self.conversations[conversation_id]["reply_frequency"]
+            return await message.channel.send(
+                f"Current reply frequency: {current_freq}"
+            )
+
+    @admin_command("history")
+    async def _set_history_length(self, message, message_tokens, conversation_id):
+        """Set or get maximum history length for current conversation"""
+        if len(message_tokens) > 1:
+            try:
+                new_length = int(message_tokens[1])
+                if new_length < 1:
+                    return await message.channel.send("History length must be positive")
+                self.conversations[conversation_id]["history_length"] = new_length
+                return await message.channel.send(
+                    f"History length set to: {new_length}"
+                )
+            except ValueError:
+                return await message.channel.send(
+                    "Please provide a valid positive integer"
+                )
+        else:
+            current_length = self.conversations[conversation_id]["history_length"]
+            return await message.channel.send(
+                f"Current history length: {current_length}"
+            )
+
+    @admin_command("prompt")
+    async def _set_conversation_prompt(
+        self, message, message_tokens=None, conversation_id=None
+    ):
+        """Set or get the prompt for the current conversation"""
+        if len(message_tokens) > 1:
+            new_prompt = " ".join(message_tokens[1:])
+            self.conversations[conversation_id]["prompt"] = new_prompt
+            return await message.channel.send(f"Prompt set to: {new_prompt}")
+        else:
+            current_prompt = self.conversations[conversation_id]["prompt"]
+            return await message.channel.send(f"Current prompt: {current_prompt}")
 
 
 # intents for the discordbot
