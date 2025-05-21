@@ -1,11 +1,10 @@
-FROM python:3.11 as libbuilder
+FROM python:3.11 AS libbuilder
 WORKDIR /app
 RUN pip install poetry
 RUN python3.11 -m venv /app/venv 
-COPY ./pyproject.toml ./poetry.lock /app/
-RUN VIRTUAL_ENV=/app/venv poetry install 
+COPY ./pyproject.toml ./poetry.lock ./README.md /app/
+RUN VIRTUAL_ENV=/app/venv poetry install --no-root
 
-# FROM ubuntu:hirsute
 FROM debian:bookworm-slim
 WORKDIR /app
 RUN apt update
