@@ -205,7 +205,7 @@ class Faebot(discord.Client):
         prompt = (
             self.conversations[conversation_id]["prompt"]
             + "\n".join(self.conversation)
-            + f"\n[{current_time}]\nfaebot:"
+            + f"\n[{current_time}] faebot:"
         )
 
         # Create a typing indicator that will continue until response is ready
@@ -329,6 +329,7 @@ class Faebot(discord.Client):
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 250,
+                    "stop": ["[20"],
                 }
             ) as response:
                 result = await response.json()
@@ -415,8 +416,6 @@ class Faebot(discord.Client):
         )
         # If none of the conditions are met, do not respond
         return False
-
-    # --------    # Admin commands
 
 
 # intents for the discordbot
