@@ -189,13 +189,6 @@ async def _set_reply_frequency(bot, message, message_tokens, conversation_id):
         if potential_conv_id in bot.conversations:
             target_id = potential_conv_id
             message_tokens = [message_tokens[0]] + message_tokens[2:]
-        elif potential_conv_id.isdigit():
-            logging.debug(
-                f"Admin {message.author.name} attempted to access non-existent conversation {potential_conv_id}"
-            )
-            return await message.channel.send(
-                f"Conversation {potential_conv_id} not found"
-            )
 
     if len(message_tokens) > 1:
         try:
