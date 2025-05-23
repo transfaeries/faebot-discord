@@ -7,7 +7,8 @@ import random
 from typing import Any
 import asyncio
 import discord
-import replicate
+import requests
+import json
 
 # Import admin commands
 from admin_commands import admin_commands, debug_prompts
@@ -20,7 +21,7 @@ logging.basicConfig(
 )
 
 
-model = os.getenv("MODEL_NAME", "meta/meta-llama-3-70b-chat")
+model = os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")  # Updated default model
 admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
 debug_prompts = env == "dev"  # Add this line after env declaration
@@ -192,7 +193,7 @@ class Faebot(discord.Client):
         prompt = (
             self.conversations[conversation_id]["prompt"]
             + "\n".join(self.conversation)
-            + f"\n[{current_time}] {author}: {message.content}\nfaebot:"
+            + f"\n[{current_time}]\nfaebot:"
         )
 
         # Generate a response
@@ -244,29 +245,63 @@ class Faebot(discord.Client):
             return None
 
     def _generate_ai_response(
-        self, prompt: str = "", author="", model="meta/meta-llama-3-70b-instruct"
+        self, prompt: str = "", author="", model="google/gemini-2.0-flash-001"
     ) -> str:
-        """Generates AI-powered responses using the Replicate API with the specified model"""
+        """Generates AI-powered responses using the OpenRouter API with the specified model"""
 
         if debug_prompts:
             logging.info("generating reply with model: " + model)
             logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
 
-        output = replicate.run(
-            model,
-            input={
-                "debug": debug_prompts,  # Also pass debug state to model
-                "top_k": 50,
-                "top_p": 1,
-                "prompt": prompt,
-                "temperature": 0.7,
-                # "system_prompt": INITIAL_PROMPT,
-                "max_new_tokens": 250,
-                "min_new_tokens": -1,
+        # Parse prompt to create a proper conversation history
+        # The prompt contains the initial system message plus the conversation history
+        # We need to extract the conversation and format it for OpenRouter
+
+        # For simplicity, let's create a basic message structure
+        messages = [
+            {
+                "role": "system",
+                "content": self.conversations.get(conversation_id, {}).get("prompt", INITIAL_PROMPT)
             },
-        )
-        response = "".join(output)
-        return response
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+
+        try:
+            response = requests.post(
+                url="https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
+                    "HTTP-Referer": os.getenv('SITE_URL', 'https://github.com/transfaeries/faebot-discord'),
+                    "X-Title": "Faebot Discord",
+                },
+                data=json.dumps({
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 250,
+                })
+            )
+
+            # Parse the JSON response
+            result = response.json()
+
+            if debug_prompts:
+                logging.info(f"OpenRouter API response: {result}")
+
+            # Extract the assistant's message content
+            if 'choices' in result and len(result['choices']) > 0:
+                reply = result['choices'][0]['message']['content']
+                return reply
+            else:
+                logging.error(f"Unexpected response format from OpenRouter: {result}")
+                return "I couldn't generate a response. Please try again."
+
+        except Exception as e:
+            logging.error(f"Error in OpenRouter API call: {e}")
+            return "Sorry, I encountered an error while trying to respond."
 
     async def _handle_conversation_reply(
         self, message, reply, author, conversation_id, prompt=""
