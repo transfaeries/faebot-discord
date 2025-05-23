@@ -11,7 +11,7 @@ from typing import Optional
 import aiohttp  # Add this import
 
 # Import admin commands
-from admin_commands import admin_commands, debug_prompts
+from admin_commands import admin_commands
 
 # set up logging
 logging.basicConfig(
@@ -24,7 +24,6 @@ logging.basicConfig(
 model = os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")  # Updated default model
 admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
-debug_prompts = env == "dev"  # Add this line after env declaration
 
 # Define placeholder constants
 PLACEHOLDER_SERVER = "{server}"
@@ -59,6 +58,7 @@ class Faebot(discord.Client):
         self.conversations: dict[str, dict[str, Any]] = {}
         self.retries: dict[str, int] = {}
         self.model: str = model
+        self.debug_prompts = env == "dev"  # Store debug state in the bot instance
 
         # Add queue for handling concurrent requests
         self.pending_responses: dict[str, asyncio.Task] = {}
@@ -334,7 +334,7 @@ class Faebot(discord.Client):
     ) -> str:
         """Generates AI-powered responses using the OpenRouter API with the specified model - now async"""
 
-        if debug_prompts:
+        if self.debug_prompts:
             logging.info("generating reply with model: " + model)
             logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
 
@@ -375,7 +375,7 @@ class Faebot(discord.Client):
             ) as response:
                 result = await response.json()
 
-                if debug_prompts:
+                if self.debug_prompts:
                     logging.info(f"OpenRouter API response: {result}")
 
                 # Extract the assistant's message content

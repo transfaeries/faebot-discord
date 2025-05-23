@@ -4,7 +4,6 @@ from functools import wraps
 
 # Get environment variables
 admin = os.getenv("ADMIN", "")
-debug_prompts = os.getenv("ENVIRONMENT", "dev").lower() == "dev"
 
 # Command registry
 admin_commands = {}
@@ -333,10 +332,9 @@ async def _set_conversation_prompt(
 @admin_command("debug")
 async def _toggle_debug_mode(bot, message, message_tokens=None, conversation_id=None):
     """Toggle debug mode on or off. Debug mode shows prompts in logs. Usage: fae;debug"""
-    global debug_prompts
-
-    debug_prompts = not debug_prompts
-    status = "on" if debug_prompts else "off"
+    # Toggle the debug state on the bot instance
+    bot.debug_prompts = not bot.debug_prompts
+    status = "on" if bot.debug_prompts else "off"
 
     logging.info(f"Admin {message.author.name} set debug mode to: {status}")
     return await message.channel.send(f"Debug mode is now: {status}")
