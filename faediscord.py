@@ -7,8 +7,8 @@ import random
 from typing import Any
 import asyncio
 import discord
-import requests
-import json
+from typing import Optional
+import aiohttp  # Add this import
 
 # Import admin commands
 from admin_commands import admin_commands, debug_prompts
@@ -47,12 +47,25 @@ class Faebot(discord.Client):
         self.conversations: dict[str, dict[str, Any]] = {}
         self.retries: dict[str, int] = {}
         self.model: str = model
+
+        # Add queue for handling concurrent requests
+        self.pending_responses: dict[str, asyncio.Task] = {}
+        self.session: Optional[aiohttp.ClientSession] = None
+
         super().__init__(intents=intents)
 
     async def on_ready(self):
         """runs when bot is ready"""
+        # Create a shared aiohttp session for async requests
+        self.session = aiohttp.ClientSession()
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
+
+    async def close(self):
+        """Close the bot and clean up resources"""
+        if self.session:
+            await self.session.close()
+        await super().close()
 
     async def on_message(self, message):
         """Handles what happens when the bot receives a message"""
@@ -162,7 +175,7 @@ class Faebot(discord.Client):
         ## assign parameters based on dm or text channel
         if message.channel.type[0] == "text":
             self.conversations[conversation_id]["name"] = str(message.channel.name)
-            self.conversations[conversation_id]["reply_frequency"] = 0.2
+            self.conversations[conversation_id]["reply_frequency"] = 0.05
         elif message.channel.type[0] == "private":
             self.conversations[conversation_id]["name"] = str(message.author.name)
             self.conversations[conversation_id]["reply_frequency"] = 1
@@ -178,7 +191,7 @@ class Faebot(discord.Client):
         )
 
     async def _handle_conversation(self, message, conversation_id):
-        """Handle regular conversation messages"""
+        """Handle regular conversation messages with improved concurrency"""
         # load conversation from history
         self.conversation = self.conversations[conversation_id]["conversation"]
 
@@ -188,7 +201,6 @@ class Faebot(discord.Client):
             return
 
         # populate prompt with conversation history and timestamp
-        author = message.author.name
         current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
         prompt = (
             self.conversations[conversation_id]["prompt"]
@@ -196,30 +208,62 @@ class Faebot(discord.Client):
             + f"\n[{current_time}]\nfaebot:"
         )
 
-        # Generate a response
-        async with message.channel.typing():
-            reply = await self._generate_reply(prompt, message, author, conversation_id)
+        # Create a typing indicator that will continue until response is ready
+        typing_task = asyncio.create_task(self._send_typing_indicator(message.channel))
+
+        # Start generating the reply in the background
+        response_task = asyncio.create_task(
+            self._generate_reply(prompt, message, conversation_id)
+        )
+
+        # Store the task for potential cancellation or monitoring
+        self.pending_responses[conversation_id] = response_task
+
+        # Wait for the response while showing typing indicator
+        try:
+            reply = await response_task
+            typing_task.cancel()  # Stop typing indicator when response is ready
+
             if not reply:
                 return
 
-        # Log the bot's reply with timestamp
-        self.conversation.append(f"[{current_time}] faebot: {reply}")
-        self.conversations[conversation_id]["conversation"] = self.conversation
+            # Log the bot's reply with timestamp
+            self.conversation.append(f"[{current_time}] faebot: {reply}")
+            self.conversations[conversation_id]["conversation"] = self.conversation
 
-        logging.info(
-            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
-            f"\nthere are currently {len(self.conversations.items())} conversations in memory"
-        )
+            logging.info(
+                f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
+                f"\nthere are currently {len(self.conversations.items())} conversations in memory"
+            )
 
-        # Send the reply
-        return await message.channel.send(reply)
+            # Send the reply
+            return await message.channel.send(reply)
 
-    async def _generate_reply(self, prompt, message, author, conversation_id):
+        except Exception as e:
+            typing_task.cancel()
+            logging.error(f"Error handling conversation: {e}")
+            return await message.channel.send("An error occurred while generating a response.")
+        finally:
+            # Clean up the task reference
+            if conversation_id in self.pending_responses:
+                del self.pending_responses[conversation_id]
+
+    async def _send_typing_indicator(self, channel):
+        """Continuously send typing indicator until cancelled"""
+        try:
+            while True:
+                async with channel.typing():
+                    await asyncio.sleep(5)  # Discord typing indicator lasts about 10 seconds
+        except asyncio.CancelledError:
+            # Task was cancelled, which is expected when the response is ready
+            pass
+
+    async def _generate_reply(self, prompt, message, conversation_id):
         """Generate a reply using the AI model, with retry logic"""
         retries = self.retries.get(conversation_id, 0)
         model = self.conversations[conversation_id]["model"]
         try:
-            reply = self._generate_ai_response(prompt, author, model)
+            reply = await self._generate_ai_response(prompt, model, conversation_id)
             self.retries[conversation_id] = 0
             return reply
         except Exception as e:
@@ -244,24 +288,22 @@ class Faebot(discord.Client):
             )
             return None
 
-    def _generate_ai_response(
-        self, prompt: str = "", author="", model="google/gemini-2.0-flash-001"
+    async def _generate_ai_response(
+        self, prompt: str = "", model="google/gemini-2.0-flash-001", conversation_id=None
     ) -> str:
-        """Generates AI-powered responses using the OpenRouter API with the specified model"""
+        """Generates AI-powered responses using the OpenRouter API with the specified model - now async"""
 
         if debug_prompts:
             logging.info("generating reply with model: " + model)
             logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
 
-        # Parse prompt to create a proper conversation history
-        # The prompt contains the initial system message plus the conversation history
-        # We need to extract the conversation and format it for OpenRouter
+        system_prompt = self.conversations[conversation_id]["prompt"]
 
-        # For simplicity, let's create a basic message structure
+        # Create a proper message structure
         messages = [
             {
                 "role": "system",
-                "content": self.conversations.get(conversation_id, {}).get("prompt", INITIAL_PROMPT)
+                "content": system_prompt
             },
             {
                 "role": "user",
@@ -270,34 +312,37 @@ class Faebot(discord.Client):
         ]
 
         try:
-            response = requests.post(
+            # Use aiohttp for async HTTP requests
+            if not self.session:
+                self.session = aiohttp.ClientSession()
+
+            async with self.session.post(
                 url="https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
                     "HTTP-Referer": os.getenv('SITE_URL', 'https://github.com/transfaeries/faebot-discord'),
                     "X-Title": "Faebot Discord",
+                    "Content-Type": "application/json",
                 },
-                data=json.dumps({
+                json={
                     "model": model,
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 250,
-                })
-            )
+                }
+            ) as response:
+                result = await response.json()
 
-            # Parse the JSON response
-            result = response.json()
+                if debug_prompts:
+                    logging.info(f"OpenRouter API response: {result}")
 
-            if debug_prompts:
-                logging.info(f"OpenRouter API response: {result}")
-
-            # Extract the assistant's message content
-            if 'choices' in result and len(result['choices']) > 0:
-                reply = result['choices'][0]['message']['content']
-                return reply
-            else:
-                logging.error(f"Unexpected response format from OpenRouter: {result}")
-                return "I couldn't generate a response. Please try again."
+                # Extract the assistant's message content
+                if 'choices' in result and len(result['choices']) > 0:
+                    reply = result['choices'][0]['message']['content']
+                    return reply
+                else:
+                    logging.error(f"Unexpected response format from OpenRouter: {result}")
+                    return "I couldn't generate a response. Please try again."
 
         except Exception as e:
             logging.error(f"Error in OpenRouter API call: {e}")
@@ -334,7 +379,7 @@ class Faebot(discord.Client):
 
         # Get reply frequency from conversation settings
         reply_frequency = self.conversations[conversation_id].get(
-            "reply_frequency", 0.2
+            "reply_frequency", 0.05
         )
 
         # Check for mentions
