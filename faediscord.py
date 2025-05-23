@@ -402,6 +402,7 @@ class Faebot(discord.Client):
                 + str(len(self.conversations[x]["conversation"]))
                 + "\n"
             )
+        logging.info(f"Admin {message.author.name} listed {len(self.conversations)} conversations")
         return await message.channel.send(reply)
 
     @admin_command("invite")
@@ -409,6 +410,7 @@ class Faebot(discord.Client):
         self, message, message_tokens=None, conversation_id=None
     ):
         """initialises a conversation in a non dm channel"""
+        logging.info(f"Admin {message.author.name} initialized new conversation in channel with ID {conversation_id}")
         return await self._initialize_conversation(
             message, message_tokens=message_tokens, conversation_id=conversation_id
         )
@@ -449,7 +451,7 @@ class Faebot(discord.Client):
         self.conversation = []
         self.conversations[to_forget]["conversation"] = self.conversation
 
-        logging.info(f"clearing memory from admin prompt in conversation {to_forget}")
+        logging.info(f"Admin {message.author.name} cleared memory for conversation {to_forget}")
         return await message.channel.send(f"cleared conversation {to_forget}")
 
     @admin_command("help")
@@ -476,17 +478,18 @@ class Faebot(discord.Client):
                 target_id = potential_conv_id
                 message_tokens = [message_tokens[0]] + message_tokens[2:]
             elif potential_conv_id.isdigit():
+                logging.info(f"Admin {message.author.name} attempted to access non-existent conversation {potential_conv_id}")
                 return await message.channel.send(f"Conversation {potential_conv_id} not found")
 
         if len(message_tokens) > 1:
             new_model = message_tokens[1]
-            logging.info(
-                f"Changing model for conversation {target_id} from {self.conversations[target_id]['model']} to {new_model}"
-            )
+            old_model = self.conversations[target_id]["model"]
             self.conversations[target_id]["model"] = new_model
+            logging.info(f"Admin {message.author.name} changed model for conversation {target_id} from {old_model} to {new_model}")
             return await message.channel.send(f"Model changed to: {new_model} for conversation {target_id}")
         else:
             current_model = self.conversations[target_id]["model"]
+            logging.info(f"Admin {message.author.name} queried model for conversation {target_id}: {current_model}")
             return await message.channel.send(f"Current model for conversation {target_id}: {current_model}")
 
     @admin_command("frequency")
@@ -501,6 +504,7 @@ class Faebot(discord.Client):
                 target_id = potential_conv_id
                 message_tokens = [message_tokens[0]] + message_tokens[2:]
             elif potential_conv_id.isdigit():
+                logging.info(f"Admin {message.author.name} attempted to access non-existent conversation {potential_conv_id}")
                 return await message.channel.send(f"Conversation {potential_conv_id} not found")
 
         if len(message_tokens) > 1:
@@ -508,12 +512,16 @@ class Faebot(discord.Client):
                 new_freq = float(message_tokens[1])
                 if not 0 <= new_freq <= 1:
                     return await message.channel.send("Frequency must be between 0 and 1")
+                old_freq = self.conversations[target_id]["reply_frequency"]
                 self.conversations[target_id]["reply_frequency"] = new_freq
+                logging.info(f"Admin {message.author.name} changed reply frequency for conversation {target_id} from {old_freq} to {new_freq}")
                 return await message.channel.send(f"Reply frequency set to: {new_freq} for conversation {target_id}")
             except ValueError:
+                logging.info(f"Admin {message.author.name} provided invalid frequency value: {message_tokens[1]}")
                 return await message.channel.send("Please provide a valid number between 0 and 1")
         else:
             current_freq = self.conversations[target_id]["reply_frequency"]
+            logging.info(f"Admin {message.author.name} queried reply frequency for conversation {target_id}: {current_freq}")
             return await message.channel.send(f"Current reply frequency for conversation {target_id}: {current_freq}")
 
     @admin_command("history")
@@ -528,6 +536,7 @@ class Faebot(discord.Client):
                 target_id = potential_conv_id
                 message_tokens = [message_tokens[0]] + message_tokens[2:]
             elif potential_conv_id.isdigit():
+                logging.info(f"Admin {message.author.name} attempted to access non-existent conversation {potential_conv_id}")
                 return await message.channel.send(f"Conversation {potential_conv_id} not found")
 
         if len(message_tokens) > 1:
@@ -535,12 +544,16 @@ class Faebot(discord.Client):
                 new_length = int(message_tokens[1])
                 if new_length < 1:
                     return await message.channel.send("History length must be positive")
+                old_length = self.conversations[target_id]["history_length"]
                 self.conversations[target_id]["history_length"] = new_length
+                logging.info(f"Admin {message.author.name} changed history length for conversation {target_id} from {old_length} to {new_length}")
                 return await message.channel.send(f"History length set to: {new_length} for conversation {target_id}")
             except ValueError:
+                logging.info(f"Admin {message.author.name} provided invalid history length: {message_tokens[1]}")
                 return await message.channel.send("Please provide a valid positive integer")
         else:
             current_length = self.conversations[target_id]["history_length"]
+            logging.info(f"Admin {message.author.name} queried history length for conversation {target_id}: {current_length}")
             return await message.channel.send(f"Current history length for conversation {target_id}: {current_length}")
 
     @admin_command("prompt")
@@ -557,14 +570,20 @@ class Faebot(discord.Client):
                 target_id = potential_conv_id
                 message_tokens = [message_tokens[0]] + message_tokens[2:]
             elif potential_conv_id.isdigit():
+                logging.info(f"Admin {message.author.name} attempted to access non-existent conversation {potential_conv_id}")
                 return await message.channel.send(f"Conversation {potential_conv_id} not found")
 
         if len(message_tokens) > 1:
             new_prompt = " ".join(message_tokens[1:])
+            old_prompt = self.conversations[target_id]["prompt"]
             self.conversations[target_id]["prompt"] = new_prompt
+            prompt_preview = (new_prompt[:75] + '...') if len(new_prompt) > 75 else new_prompt
+            logging.info(f"Admin {message.author.name} changed prompt for conversation {target_id} to: {prompt_preview}")
             return await message.channel.send(f"Prompt set for conversation {target_id}: {new_prompt}")
         else:
             current_prompt = self.conversations[target_id]["prompt"]
+            prompt_preview = (current_prompt[:75] + '...') if len(current_prompt) > 75 else current_prompt
+            logging.info(f"Admin {message.author.name} queried prompt for conversation {target_id}")
             return await message.channel.send(f"Current prompt for conversation {target_id}: {current_prompt}")
 # intents for the discordbot
 intents = discord.Intents.default()
