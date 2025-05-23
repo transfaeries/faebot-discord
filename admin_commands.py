@@ -271,7 +271,14 @@ async def _set_history_length(bot, message, message_tokens, conversation_id):
 async def _set_conversation_prompt(
     bot, message, message_tokens=None, conversation_id=None
 ):
-    """Set or get the prompt for a conversation. Usage: fae;prompt [conversation_id] [new_prompt]"""
+    """Set or get the prompt for a conversation. Usage: fae;prompt [conversation_id] [new_prompt]
+    
+    Supports placeholders:
+    {server} - Server name
+    {channel} - Channel name
+    {topic} - Channel topic
+    {author} - Message author name
+    """
     target_id = conversation_id
 
     # Check if first argument is a conversation ID
@@ -290,7 +297,14 @@ async def _set_conversation_prompt(
 
     if len(message_tokens) > 1:
         new_prompt = " ".join(message_tokens[1:])
-        old_prompt = bot.conversations[target_id]["prompt"]
+        
+        # Replace placeholders with actual values
+        conversation_data = bot.conversations[target_id]
+        new_prompt = new_prompt.replace("{server}", conversation_data.get("server_name", ""))
+        new_prompt = new_prompt.replace("{channel}", conversation_data.get("channel_name", ""))
+        new_prompt = new_prompt.replace("{topic}", conversation_data.get("channel_topic", ""))
+        new_prompt = new_prompt.replace("{conversants}", ', '.join(conversation_data.get("conversants", "")))
+        
         bot.conversations[target_id]["prompt"] = new_prompt
         prompt_preview = (
             (new_prompt[:75] + "...") if len(new_prompt) > 75 else new_prompt
@@ -299,7 +313,7 @@ async def _set_conversation_prompt(
             f"Admin {message.author.name} changed prompt for conversation {target_id} to: {prompt_preview}"
         )
         return await message.channel.send(
-            f"Prompt set for conversation {target_id}: {new_prompt}"
+            f"Prompt set for conversation {target_id}: {prompt_preview}"
         )
     else:
         current_prompt = bot.conversations[target_id]["prompt"]

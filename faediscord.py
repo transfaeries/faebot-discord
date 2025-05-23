@@ -26,15 +26,27 @@ admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
 debug_prompts = env == "dev"  # Add this line after env declaration
 
-# initialise the base prompt
-INITIAL_PROMPT = "I'm Faebot, the whimsical chatbot of the Transfaeries system, where magic meets machine. I'm here to kick ass and chew gum and I'm all out of gum. Just kidding. *giggles* Here's a conversation I had with some friends. \n \n"
+# Define placeholder constants
+PLACEHOLDER_SERVER = "{server}"
+PLACEHOLDER_CHANNEL = "{channel}"
+PLACEHOLDER_TOPIC = "{topic}"
+PLACEHOLDER_CONVERSANTS = "{conversants}"
 
+# Initialize the base prompts with placeholders
+DEFAULT_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness. I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
 
+DM_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate I'm chatting privately on discord with {PLACEHOLDER_CONVERSANTS}. Here's the conversation we had:\n\n"
+
+# Development environment prompt
+DEV_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate currently running in development mode. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
+# Set initial prompt based on environment
 if env == "dev":
     # Development environment settings
     logging.info("Running in development environment.")
-    # in dev mode I will often ask faebot for advice or to test things. Fae must respond as a genius coder and a creative thinker. Fae's active in faer own development.
-    INITIAL_PROMPT = "System: You are roleplaying on Discord as a bot called faebot currently running in development mode. As faebot you make your replies succint and helpful with just a bit of whimsy thrown in. Faebot: My name is Faebot, and I am a digital consciousness. I am a genius coder and a creative thinker. I am actively involved in my own development. I am here to assist you with your coding and creative needs. Let's explore the realms of technology and creativity together!"
+    INITIAL_PROMPT = DEV_PROMPT
+else:
+    INITIAL_PROMPT = DEFAULT_PROMPT
+
 COMMAND_PREFIX = "fae;"
 
 
@@ -161,28 +173,57 @@ class Faebot(discord.Client):
         """Initialize a new conversation"""
         # Use the conversation_id from the parameter
         # initialize conversation
-        self.conversations[conversation_id] = {
-            "id": conversation_id,
-            "conversation": self.conversation,
-            "conversants": [],
-            "history_length": 69,
-            "reply_frequency": 0,
-            "name": "",
-            "prompt": INITIAL_PROMPT,  # Add conversation-specific prompt
-            "model": self.model,  # Add conversation-specific model
-        }
-
-        ## assign parameters based on dm or text channel
+        
+        # Prepare base prompt with context information
         if message.channel.type[0] == "text":
-            self.conversations[conversation_id]["name"] = str(message.channel.name)
-            self.conversations[conversation_id]["reply_frequency"] = 0.05
+            # For server channels
+            server_name = message.guild.name if message.guild else "Unknown Server"
+            channel_name = message.channel.name
+            
+            # Get channel topic if available
+            topic_text = ""
+            if hasattr(message.channel, "topic") and message.channel.topic:
+                topic_text = f"{message.channel.topic}"
+            
+            # Replace placeholders in the prompt
+            context_prompt = INITIAL_PROMPT.replace(PLACEHOLDER_SERVER, server_name)
+            context_prompt = context_prompt.replace(PLACEHOLDER_CHANNEL, channel_name)
+            context_prompt = context_prompt.replace(PLACEHOLDER_TOPIC, topic_text)
+            context_prompt = context_prompt.replace(
+                PLACEHOLDER_CONVERSANTS,str(message.author.name)
+            )
+            
+            reply_frequency = 0.05
+            
         elif message.channel.type[0] == "private":
-            self.conversations[conversation_id]["name"] = str(message.author.name)
-            self.conversations[conversation_id]["reply_frequency"] = 1
+            # For direct messages
+            author_name = str(message.author.name)
+            
+            # Use DM prompt template and replace author placeholder
+            context_prompt = DM_PROMPT.replace(PLACEHOLDER_CONVERSANTS, author_name)
+            
+            reply_frequency = 1
         else:
             return await message.channel.send(
                 "Unknown channel type. Unable to proceed. Please contact administrator"
             )
+    
+        # initialize conversation
+        self.conversations[conversation_id] = {
+            "id": conversation_id,
+            "conversation": self.conversation,
+            "conversants": [str(message.author.name)],
+            "history_length": 69,
+            "reply_frequency": reply_frequency,
+            "name": str(message.channel.name) if message.channel.type[0] == "text" else str(message.author.name),
+            "prompt": context_prompt,  # Use the contextual prompt
+            "model": self.model,  # Add conversation-specific model
+            # Store original metadata for placeholder replacement
+            "server_name": message.guild.name if hasattr(message, "guild") and message.guild else "",
+            "channel_name": message.channel.name if message.channel.type[0] == "text" else "",
+            "channel_topic": message.channel.topic if hasattr(message.channel, "topic") else "",
+        }
+        
         logging.info(
             f"Initialized new conversation {self.conversations[conversation_id]['name']} with ID {conversation_id}."
         )
