@@ -377,6 +377,10 @@ class Faebot(discord.Client):
         )
         # If none of the conditions are met, do not respond
         return False
+    
+
+    
+    #--------    # Admin commands
 
     @admin_command("conversations")
     async def _list_conversations(
@@ -462,76 +466,106 @@ class Faebot(discord.Client):
     async def _set_or_return_model(
         self, message, message_tokens=None, conversation_id=None
     ):
-        """sets the model to use for generating responses or returns the current model name"""
+        """sets the model to use for generating responses or returns the current model name. Usage: fae;model [conversation_id] [new_model]"""
+        target_id = conversation_id
+        
+        # Check if first argument is a conversation ID
+        if len(message_tokens) > 1:
+            potential_conv_id = message_tokens[1]
+            if potential_conv_id in self.conversations:
+                target_id = potential_conv_id
+                message_tokens = [message_tokens[0]] + message_tokens[2:]
+            elif potential_conv_id.isdigit():
+                return await message.channel.send(f"Conversation {potential_conv_id} not found")
+
         if len(message_tokens) > 1:
             new_model = message_tokens[1]
             logging.info(
-                f"Changing model for conversation {conversation_id} from {self.conversations[conversation_id]['model']} to {new_model}"
+                f"Changing model for conversation {target_id} from {self.conversations[target_id]['model']} to {new_model}"
             )
-            self.conversations[conversation_id]["model"] = new_model
-            return await message.channel.send(f"Model changed to: {new_model}")
+            self.conversations[target_id]["model"] = new_model
+            return await message.channel.send(f"Model changed to: {new_model} for conversation {target_id}")
         else:
-            current_model = self.conversations[conversation_id]["model"]
-            return await message.channel.send(f"Current model is: {current_model}")
+            current_model = self.conversations[target_id]["model"]
+            return await message.channel.send(f"Current model for conversation {target_id}: {current_model}")
 
     @admin_command("frequency")
     async def _set_reply_frequency(self, message, message_tokens, conversation_id):
-        """Set or get reply frequency (0-1) for current conversation"""
+        """Set or get reply frequency (0-1) for a conversation. Usage: fae;frequency [conversation_id] [value]"""
+        target_id = conversation_id
+        
+        # Check if first argument is a conversation ID
+        if len(message_tokens) > 1:
+            potential_conv_id = message_tokens[1]
+            if potential_conv_id in self.conversations:
+                target_id = potential_conv_id
+                message_tokens = [message_tokens[0]] + message_tokens[2:]
+            elif potential_conv_id.isdigit():
+                return await message.channel.send(f"Conversation {potential_conv_id} not found")
+
         if len(message_tokens) > 1:
             try:
                 new_freq = float(message_tokens[1])
                 if not 0 <= new_freq <= 1:
-                    return await message.channel.send(
-                        "Frequency must be between 0 and 1"
-                    )
-                self.conversations[conversation_id]["reply_frequency"] = new_freq
-                return await message.channel.send(f"Reply frequency set to: {new_freq}")
+                    return await message.channel.send("Frequency must be between 0 and 1")
+                self.conversations[target_id]["reply_frequency"] = new_freq
+                return await message.channel.send(f"Reply frequency set to: {new_freq} for conversation {target_id}")
             except ValueError:
-                return await message.channel.send(
-                    "Please provide a valid number between 0 and 1"
-                )
+                return await message.channel.send("Please provide a valid number between 0 and 1")
         else:
-            current_freq = self.conversations[conversation_id]["reply_frequency"]
-            return await message.channel.send(
-                f"Current reply frequency: {current_freq}"
-            )
+            current_freq = self.conversations[target_id]["reply_frequency"]
+            return await message.channel.send(f"Current reply frequency for conversation {target_id}: {current_freq}")
 
     @admin_command("history")
     async def _set_history_length(self, message, message_tokens, conversation_id):
-        """Set or get maximum history length for current conversation"""
+        """Set or get maximum history length for a conversation. Usage: fae;history [conversation_id] [length]"""
+        target_id = conversation_id
+        
+        # Check if first argument is a conversation ID
+        if len(message_tokens) > 1:
+            potential_conv_id = message_tokens[1]
+            if potential_conv_id in self.conversations:
+                target_id = potential_conv_id
+                message_tokens = [message_tokens[0]] + message_tokens[2:]
+            elif potential_conv_id.isdigit():
+                return await message.channel.send(f"Conversation {potential_conv_id} not found")
+
         if len(message_tokens) > 1:
             try:
                 new_length = int(message_tokens[1])
                 if new_length < 1:
                     return await message.channel.send("History length must be positive")
-                self.conversations[conversation_id]["history_length"] = new_length
-                return await message.channel.send(
-                    f"History length set to: {new_length}"
-                )
+                self.conversations[target_id]["history_length"] = new_length
+                return await message.channel.send(f"History length set to: {new_length} for conversation {target_id}")
             except ValueError:
-                return await message.channel.send(
-                    "Please provide a valid positive integer"
-                )
+                return await message.channel.send("Please provide a valid positive integer")
         else:
-            current_length = self.conversations[conversation_id]["history_length"]
-            return await message.channel.send(
-                f"Current history length: {current_length}"
-            )
+            current_length = self.conversations[target_id]["history_length"]
+            return await message.channel.send(f"Current history length for conversation {target_id}: {current_length}")
 
     @admin_command("prompt")
     async def _set_conversation_prompt(
         self, message, message_tokens=None, conversation_id=None
     ):
-        """Set or get the prompt for the current conversation"""
+        """Set or get the prompt for a conversation. Usage: fae;prompt [conversation_id] [new_prompt]"""
+        target_id = conversation_id
+        
+        # Check if first argument is a conversation ID
+        if len(message_tokens) > 1:
+            potential_conv_id = message_tokens[1]
+            if potential_conv_id in self.conversations:
+                target_id = potential_conv_id
+                message_tokens = [message_tokens[0]] + message_tokens[2:]
+            elif potential_conv_id.isdigit():
+                return await message.channel.send(f"Conversation {potential_conv_id} not found")
+
         if len(message_tokens) > 1:
             new_prompt = " ".join(message_tokens[1:])
-            self.conversations[conversation_id]["prompt"] = new_prompt
-            return await message.channel.send(f"Prompt set to: {new_prompt}")
+            self.conversations[target_id]["prompt"] = new_prompt
+            return await message.channel.send(f"Prompt set for conversation {target_id}: {new_prompt}")
         else:
-            current_prompt = self.conversations[conversation_id]["prompt"]
-            return await message.channel.send(f"Current prompt: {current_prompt}")
-
-
+            current_prompt = self.conversations[target_id]["prompt"]
+            return await message.channel.send(f"Current prompt for conversation {target_id}: {current_prompt}")
 # intents for the discordbot
 intents = discord.Intents.default()
 intents.message_content = True
