@@ -91,7 +91,6 @@ class Faebot(discord.Client):
                 return
 
         # initialise conversation holder
-        self.conversation: list[str] = []
         conversation_id = str(message.channel.id)
 
         # detect and handle admin commands
@@ -173,57 +172,65 @@ class Faebot(discord.Client):
         """Initialize a new conversation"""
         # Use the conversation_id from the parameter
         # initialize conversation
-        
+
         # Prepare base prompt with context information
         if message.channel.type[0] == "text":
             # For server channels
             server_name = message.guild.name if message.guild else "Unknown Server"
             channel_name = message.channel.name
-            
+
             # Get channel topic if available
             topic_text = ""
             if hasattr(message.channel, "topic") and message.channel.topic:
                 topic_text = f"{message.channel.topic}"
-            
+
             # Replace placeholders in the prompt
             context_prompt = INITIAL_PROMPT.replace(PLACEHOLDER_SERVER, server_name)
             context_prompt = context_prompt.replace(PLACEHOLDER_CHANNEL, channel_name)
             context_prompt = context_prompt.replace(PLACEHOLDER_TOPIC, topic_text)
             context_prompt = context_prompt.replace(
-                PLACEHOLDER_CONVERSANTS,str(message.author.name)
+                PLACEHOLDER_CONVERSANTS, str(message.author.name)
             )
-            
+
             reply_frequency = 0.05
-            
+
         elif message.channel.type[0] == "private":
             # For direct messages
             author_name = str(message.author.name)
-            
+
             # Use DM prompt template and replace author placeholder
             context_prompt = DM_PROMPT.replace(PLACEHOLDER_CONVERSANTS, author_name)
-            
+
             reply_frequency = 1
         else:
             return await message.channel.send(
                 "Unknown channel type. Unable to proceed. Please contact administrator"
             )
-    
+
         # initialize conversation
         self.conversations[conversation_id] = {
             "id": conversation_id,
-            "conversation": self.conversation,
+            "conversation": [],
             "conversants": [str(message.author.name)],
             "history_length": 69,
             "reply_frequency": reply_frequency,
-            "name": str(message.channel.name) if message.channel.type[0] == "text" else str(message.author.name),
+            "name": str(message.channel.name)
+            if message.channel.type[0] == "text"
+            else str(message.author.name),
             "prompt": context_prompt,  # Use the contextual prompt
             "model": self.model,  # Add conversation-specific model
             # Store original metadata for placeholder replacement
-            "server_name": message.guild.name if hasattr(message, "guild") and message.guild else "",
-            "channel_name": message.channel.name if message.channel.type[0] == "text" else "",
-            "channel_topic": message.channel.topic if hasattr(message.channel, "topic") else "",
+            "server_name": message.guild.name
+            if hasattr(message, "guild") and message.guild
+            else "",
+            "channel_name": message.channel.name
+            if message.channel.type[0] == "text"
+            else "",
+            "channel_topic": message.channel.topic
+            if hasattr(message.channel, "topic")
+            else "",
         }
-        
+
         logging.info(
             f"Initialized new conversation {self.conversations[conversation_id]['name']} with ID {conversation_id}."
         )
@@ -233,8 +240,6 @@ class Faebot(discord.Client):
 
     async def _handle_conversation(self, message, conversation_id):
         """Handle regular conversation messages with improved concurrency"""
-        # load conversation from history
-        self.conversation = self.conversations[conversation_id]["conversation"]
 
         # check if we should respond to the message
         should_respond = await self._should_respond_to_message(message, conversation_id)
@@ -245,7 +250,7 @@ class Faebot(discord.Client):
         current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
         prompt = (
             self.conversations[conversation_id]["prompt"]
-            + "\n".join(self.conversation)
+            + "\n".join(self.conversations[conversation_id]["conversation"])
             + f"\n[{current_time}] faebot:"
         )
 
@@ -269,11 +274,12 @@ class Faebot(discord.Client):
                 return
 
             # Log the bot's reply with timestamp
-            self.conversation.append(f"[{current_time}] faebot: {reply}")
-            self.conversations[conversation_id]["conversation"] = self.conversation
+            self.conversations[conversation_id]["conversation"].append(
+                f"[{current_time}] faebot: {reply}"
+            )
 
             logging.info(
-                f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
+                f"conversation is currently {len(self.conversations[conversation_id]['conversation'])} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
                 f"\nthere are currently {len(self.conversations.items())} conversations in memory"
             )
 
@@ -283,7 +289,9 @@ class Faebot(discord.Client):
         except Exception as e:
             typing_task.cancel()
             logging.error(f"Error handling conversation: {e}")
-            return await message.channel.send("An error occurred while generating a response.")
+            return await message.channel.send(
+                "An error occurred while generating a response."
+            )
         finally:
             # Clean up the task reference
             if conversation_id in self.pending_responses:
@@ -294,7 +302,9 @@ class Faebot(discord.Client):
         try:
             while True:
                 async with channel.typing():
-                    await asyncio.sleep(5)  # Discord typing indicator lasts about 10 seconds
+                    await asyncio.sleep(
+                        5
+                    )  # Discord typing indicator lasts about 10 seconds
         except asyncio.CancelledError:
             # Task was cancelled, which is expected when the response is ready
             pass
@@ -312,12 +322,17 @@ class Faebot(discord.Client):
                 f"Error generating reply for conversation {conversation_id}: {e}"
             )
             # If there's an error, we log it and retry with a reduced prompt
-            logging.info(
-                f"could not generate. Reducing prompt size and retrying. Conversation is currently {len(self.conversation)} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
+            conversation_length = len(
+                self.conversations.get(conversation_id, {}).get("conversation", [])
             )
-            self.conversations[conversation_id]["conversation"] = self.conversation[2:]
+            logging.info(
+                f"could not generate. Reducing prompt size and retrying. Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
+            )
+            self.conversations[conversation_id]["conversation"] = self.conversations[
+                conversation_id
+            ]["conversation"][2:]
             if retries < 1:
-                await asyncio.sleep(retries * 1000)
+                await asyncio.sleep(retries * 10)
                 self.retries[conversation_id] = retries + 1
                 # Note: We're returning None here as we'll retry with on_message
                 return None
@@ -330,7 +345,10 @@ class Faebot(discord.Client):
             return None
 
     async def _generate_ai_response(
-        self, prompt: str = "", model="google/gemini-2.0-flash-001", conversation_id=None
+        self,
+        prompt: str = "",
+        model="google/gemini-2.0-flash-001",
+        conversation_id=None,
     ) -> str:
         """Generates AI-powered responses using the OpenRouter API with the specified model - now async"""
 
@@ -342,14 +360,8 @@ class Faebot(discord.Client):
 
         # Create a proper message structure
         messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
         ]
 
         try:
@@ -361,7 +373,9 @@ class Faebot(discord.Client):
                 url="https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
-                    "HTTP-Referer": os.getenv('SITE_URL', 'https://github.com/transfaeries/faebot-discord'),
+                    "HTTP-Referer": os.getenv(
+                        "SITE_URL", "https://github.com/transfaeries/faebot-discord"
+                    ),
                     "X-Title": "Faebot Discord",
                     "Content-Type": "application/json",
                 },
@@ -371,7 +385,7 @@ class Faebot(discord.Client):
                     "temperature": 0.7,
                     "max_tokens": 250,
                     "stop": ["[20"],
-                }
+                },
             ) as response:
                 result = await response.json()
 
@@ -379,41 +393,18 @@ class Faebot(discord.Client):
                     logging.info(f"OpenRouter API response: {result}")
 
                 # Extract the assistant's message content
-                if 'choices' in result and len(result['choices']) > 0:
-                    reply = result['choices'][0]['message']['content']
+                if "choices" in result and len(result["choices"]) > 0:
+                    reply = result["choices"][0]["message"]["content"]
                     return reply
                 else:
-                    logging.error(f"Unexpected response format from OpenRouter: {result}")
+                    logging.error(
+                        f"Unexpected response format from OpenRouter: {result}"
+                    )
                     return "I couldn't generate a response. Please try again."
 
         except Exception as e:
             logging.error(f"Error in OpenRouter API call: {e}")
             return "Sorry, I encountered an error while trying to respond."
-
-    async def _handle_conversation_reply(
-        self, message, reply, author, conversation_id, prompt=""
-    ):
-        """Save the conversation history"""
-        # If it returns an empty reply, clear memory and provide default response
-        if not reply:
-            reply = "I don't know what to say"
-            logging.info("clearing self.conversation")
-            self.conversation = []
-            self.conversations[conversation_id]["conversation"] = self.conversation
-            return await message.channel.send(reply)
-
-        # Log the conversation
-        logging.info(f"sending reply: '{reply}' \n and logging into conversation")
-        self.conversation.append(f"{author}: {message.content}")
-        self.conversation.append(f"faebot-dev: {reply}")
-        self.conversations[conversation_id]["conversation"] = self.conversation
-
-        logging.info(
-            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
-            f"\nthere are currently {len(self.conversations.items())} conversations in memory"
-        )
-
-        return reply
 
     async def _should_respond_to_message(self, message, conversation_id):
         """Determine if the bot should respond based on specified criteria"""
