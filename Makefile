@@ -14,14 +14,14 @@ lint:
 	poetry run flake8 .
 
 # Format code with black
-format:
+black:
 	@echo "Running formatter..."
 	poetry run black .
 
 # Run static type checking with mypy
 static_type_check:
 	@echo "Running static type checker..."
-	poetry run mypy .
+	poetry run mypy . --exclude 'snippets/'
 
 # Setup pre-commit hooks
 setup-hooks:

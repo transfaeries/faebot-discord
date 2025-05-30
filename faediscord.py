@@ -4,7 +4,7 @@
 import os
 import logging
 import random
-from typing import Any
+from typing import Any, Dict
 import asyncio
 import discord
 from typing import Optional
@@ -62,13 +62,13 @@ class Faebot(discord.Client):
 
     def __init__(self, intents) -> None:
         # initialise conversation logging
-        self.conversations: dict[str, dict[str, Any]] = {}
-        self.retries: dict[str, int] = {}
+        self.conversations: Dict[str, Dict[str, Any]] = {}
+        self.retries: Dict[str, int] = {}
         self.model: str = model
         self.debug_prompts = env == "dev"  # Store debug state in the bot instance
 
         # Add queue for handling concurrent requests
-        self.pending_responses: dict[str, asyncio.Task] = {}
+        self.pending_responses: Dict[str, asyncio.Task] = {}
         self.session: Optional[aiohttp.ClientSession] = None
 
         super().__init__(intents=intents)
@@ -405,7 +405,7 @@ class Faebot(discord.Client):
                 # Extract the assistant's message content
                 if "choices" in result and len(result["choices"]) > 0:
                     reply = result["choices"][0]["message"]["content"]
-                    return reply
+                    return str(reply)
                 else:
                     logging.error(
                         f"Unexpected response format from OpenRouter: {result}"
