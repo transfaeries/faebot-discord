@@ -322,11 +322,16 @@ class Faebot(discord.Client):
             logging.info(
                 f"could not generate. Reducing prompt size and retrying. Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
             )
-            
+
             # Manually trim by 2 messages for retries
-            if conversation_id in self.conversations and len(self.conversations[conversation_id]["conversation"]) >= 2:
-                self.conversations[conversation_id]["conversation"] = self.conversations[conversation_id]["conversation"][2:]
-                
+            if (
+                conversation_id in self.conversations
+                and len(self.conversations[conversation_id]["conversation"]) >= 2
+            ):
+                self.conversations[conversation_id][
+                    "conversation"
+                ] = self.conversations[conversation_id]["conversation"][2:]
+
             if retries < 1:
                 await asyncio.sleep(retries * 10)
                 self.retries[conversation_id] = retries + 1
@@ -459,8 +464,12 @@ class Faebot(discord.Client):
         # Trim to exactly history_length
         if current_length > history_length:
             excess = current_length - history_length
-            self.conversations[conversation_id]["conversation"] = self.conversations[conversation_id]["conversation"][excess:]
-            logging.debug(f"Trimmed conversation {conversation_id} from {current_length} to {history_length} messages")
+            self.conversations[conversation_id]["conversation"] = self.conversations[
+                conversation_id
+            ]["conversation"][excess:]
+            logging.debug(
+                f"Trimmed conversation {conversation_id} from {current_length} to {history_length} messages"
+            )
 
 
 # intents for the discordbot

@@ -72,11 +72,5 @@ async def mock_aiohttp_session():
 def mock_openrouter_response():
     """Mock OpenRouter API response"""
     return {
-        "choices": [
-            {
-                "message": {
-                    "content": "This is a test response from the AI"
-                }
-            }
-        ]
+        "choices": [{"message": {"content": "This is a test response from the AI"}}]
     }
