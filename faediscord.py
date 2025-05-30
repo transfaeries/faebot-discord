@@ -103,15 +103,6 @@ class Faebot(discord.Client):
             if author not in self.conversations[conversation_id]["conversants"]:
                 self.conversations[conversation_id]["conversants"].append(author)
 
-            # Trim memory if too full
-            if (
-                len(self.conversations[conversation_id]["conversation"])
-                > self.conversations[conversation_id]["history_length"]
-            ):
-                self.conversations[conversation_id][
-                    "conversation"
-                ] = self.conversations[conversation_id]["conversation"][2:]
-
             # If message is a reply, log the referenced message first if we don't have it
             if (
                 hasattr(message, "reference")
@@ -138,6 +129,9 @@ class Faebot(discord.Client):
                 self.conversations[conversation_id]["conversation"].append(
                     f"[{current_time}] {author}: {message.content}"
                 )
+
+            # Use our helper function to trim the conversation if needed
+            self._trim_conversation_history(conversation_id)
 
             # Handle reply if needed
             return await self._handle_conversation(message, conversation_id)
@@ -328,9 +322,11 @@ class Faebot(discord.Client):
             logging.info(
                 f"could not generate. Reducing prompt size and retrying. Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
             )
-            self.conversations[conversation_id]["conversation"] = self.conversations[
-                conversation_id
-            ]["conversation"][2:]
+            
+            # Manually trim by 2 messages for retries
+            if conversation_id in self.conversations and len(self.conversations[conversation_id]["conversation"]) >= 2:
+                self.conversations[conversation_id]["conversation"] = self.conversations[conversation_id]["conversation"][2:]
+                
             if retries < 1:
                 await asyncio.sleep(retries * 10)
                 self.retries[conversation_id] = retries + 1
@@ -448,6 +444,23 @@ class Faebot(discord.Client):
         )
         # If none of the conditions are met, do not respond
         return False
+
+    def _trim_conversation_history(self, conversation_id):
+        """
+        Trim conversation history to match the specified history_length.
+        This ensures memory management is consistent throughout the bot.
+        """
+        if conversation_id not in self.conversations:
+            return
+
+        history_length = self.conversations[conversation_id]["history_length"]
+        current_length = len(self.conversations[conversation_id]["conversation"])
+
+        # Trim to exactly history_length
+        if current_length > history_length:
+            excess = current_length - history_length
+            self.conversations[conversation_id]["conversation"] = self.conversations[conversation_id]["conversation"][excess:]
+            logging.debug(f"Trimmed conversation {conversation_id} from {current_length} to {history_length} messages")
 
 
 # intents for the discordbot
