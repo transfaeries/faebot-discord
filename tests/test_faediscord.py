@@ -155,6 +155,7 @@ class TestFaebot:
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {'reply_frequency': 0.05}
         faebot.user.mentioned_in.return_value = False
+        faebot.user.display_name = "faebot"  
         mock_message.content = "hey faebot how are you"
         
         result = await faebot._should_respond_to_message(mock_message, conversation_id)
@@ -166,6 +167,7 @@ class TestFaebot:
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {'reply_frequency': 1.0}  # Always respond
         faebot.user.mentioned_in.return_value = False
+        faebot.user.display_name = "faebot"  
         mock_message.content = "random message"
         
         with patch('faediscord.random.random', return_value=0.5):
