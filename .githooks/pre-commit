@@ -1,23 +1,34 @@
 #!/bin/bash
 set -e
 
-# Format Python files that are staged for commit
-FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.py$')
+echo "Running pre-commit hooks..."
 
-if [ -n "$FILES" ]; then
-  echo "Running Black formatter on staged Python files..."
-  
-  # Run Black in check mode first to see if it would make changes
-  if ! poetry run black --check $FILES > /dev/null 2>&1; then
-    echo "Black would make changes to the following files:"
-    poetry run black --check $FILES
-    echo "Running Black to format the files..."
-    poetry run black $FILES
-    echo "Files have been formatted. Please review the changes and stage them before committing."
-    exit 1
-  else
-    echo "All Python files are properly formatted!"
-  fi
+# Get all staged Python files
+staged_files=$(git diff --cached --name-only --diff-filter=ACMR | grep "\.py$" || true)
+
+if [ -n "$staged_files" ]; then
+    # Run Black formatter on staged files
+    echo "Running Black on staged files..."
+    poetry run black $staged_files
+    
+    # Run flake8 on staged files
+    echo "Running flake8 on staged files..."
+    poetry run flake8 $staged_files
+    
+    # Run mypy on staged files (excluding snippets)
+    echo "Running mypy on staged files..."
+    for file in $staged_files; do
+        if [[ $file != snippets/* ]]; then
+            poetry run mypy "$file"
+        fi
+    done
+    
+    # Add back the formatted files to staging
+    git add $staged_files
+    
+    echo "Pre-commit checks passed!"
+else
+    echo "No Python files to check."
 fi
 
 exit 0

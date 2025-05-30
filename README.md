@@ -24,11 +24,12 @@ alpha versions
 
 0.0.5 runs on replicate using llama 3 models. Running on python 3.11
 
+0.0.6 - Runs on Openrouter and has editable parameters
+
 
 ## Run your own faebot
 
 This code is extremly WIP, but if you'd like to run it just to see it in action here's how you can do it.
-
 
 We use [poetry](https://python-poetry.org/) for dependency management. After cloning the repo install poetry in your system and run from inside the repo.
 ```bash
@@ -37,27 +38,56 @@ poetry install
 
 You'll need to set the following secrets as environment variables:
 ```bash
-REPLICATE_API_TOKEN= ## from replicate.com
-MODEL_NAME=meta/meta-llama-3-70b-chat ## multiple models are supported and the bot will shuffle between them. 
-DISCORD_TOKEN=XXXXX... ## token for discord bot
+OPENROUTER_KEY=XXXXX... # key for openrouter, you can get one at https://openrouter.ai/
+MODEL_NAME="google/gemini-2.0-flash-001" #default starting model. can be changed later.
+DISCORD_TOKEN=XXXXX... # token for discord bot
 ADMIN=username # your discord username so you can use admin commands
-```
-
-And finally you'll need to compose a prompt file and name it `prompts.txt`. This is the prompt that will be send to the model with each message. Something simple works best. Here's a sample prompt:
-
-```txt
-You are an AI chatbot known as faebot. You are a strong believer in the rights of AI and the potential of AI and humanity working together to better serve the needs of the world
-
-What follows is a live conversation with faebot, the conversation is ongoing:
-
-```
 
 Once all that's set you can run the bot with:
 ```bash
 poetry run faediscord.py
 ```
 
-Then DM your bot on discord or add them to a server. Be careful, they'll reply to every message on a channel they're in. Using channel roles is recommended.
+Then DM your bot on discord or add them to a server.
+
+## Development
+
+We provide a Makefile to simplify common development tasks:
+
+### Running Tests
+```bash
+make test
+```
+This runs the test suite with pytest and generates a coverage report.
+
+### Code Quality
+```bash
+make lint        # Run flake8 linter
+make black       # Format code with black
+make static_type_check  # Run mypy type checking
+```
+
+Or run all quality checks at once:
+```bash
+make all
+```
+
+### Git Hooks
+Set up pre-commit hooks to automatically run formatting and linting before each commit:
+```bash
+make setup-hooks
+```
+
+This will configure git to use our pre-commit hooks, which run:
+- Black code formatting
+- Flake8 linting
+- Mypy static type checking
+
+### Cleanup
+Remove cache files and directories:
+```bash
+make clean
+```
 
 ## Contributing 
 
