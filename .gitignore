@@ -131,3 +131,6 @@ dmypy.json
 #extras
 snippets/*
 prompt*
+
+#vscode
+.vscode/*
