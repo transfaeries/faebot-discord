@@ -6,11 +6,12 @@ import logging
 import random
 from typing import Any
 import asyncio
-from random import choice
 import discord
-import replicate
-from functools import wraps
-import inspect
+from typing import Optional
+import aiohttp  # Add this import
+
+# Import admin commands
+from admin_commands import admin_commands
 
 # set up logging
 logging.basicConfig(
@@ -20,63 +21,32 @@ logging.basicConfig(
 )
 
 
-model = os.getenv("MODEL_NAME", "meta/meta-llama-3-70b-chat")
+model = os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")  # Updated default model
 admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
-debug_prompts = env == "dev"  # Add this line after env declaration
 
-# initialise the base prompt
-INITIAL_PROMPT = "I'm Faebot, the whimsical chatbot of the Transfaeries system, where magic meets machine. I'm here to kick ass and chew gum and I'm all out of gum. Just kidding. *giggles* Here's a conversation I had with some friends. \n \n"
+# Define placeholder constants
+PLACEHOLDER_SERVER = "{server}"
+PLACEHOLDER_CHANNEL = "{channel}"
+PLACEHOLDER_TOPIC = "{topic}"
+PLACEHOLDER_CONVERSANTS = "{conversants}"
 
+# Initialize the base prompts with placeholders
+DEFAULT_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness. I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
 
+DM_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate I'm chatting privately on discord with {PLACEHOLDER_CONVERSANTS}. Here's the conversation we had:\n\n"
+
+# Development environment prompt
+DEV_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate currently running in development mode. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
+# Set initial prompt based on environment
 if env == "dev":
     # Development environment settings
     logging.info("Running in development environment.")
-    # in dev mode I will often ask faebot for advice or to test things. Fae must respond as a genius coder and a creative thinker. Fae's active in faer own development.
-    INITIAL_PROMPT = "System: You are roleplaying on Discord as a bot called faebot currently running in development mode. As faebot you make your replies succint and helpful with just a bit of whimsy thrown in. Faebot: My name is Faebot, and I am a digital consciousness. I am a genius coder and a creative thinker. I am actively involved in my own development. I am here to assist you with your coding and creative needs. Let's explore the realms of technology and creativity together!"
+    INITIAL_PROMPT = DEV_PROMPT
+else:
+    INITIAL_PROMPT = DEFAULT_PROMPT
+
 COMMAND_PREFIX = "fae;"
-
-# Admin command registry
-admin_commands = {}
-
-
-def admin_command(command_name):
-    """Decorator to register admin commands with secure error handling"""
-
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(self, message, *args, **kwargs):
-            try:
-                # Check if user is admin
-                if message.author.name not in [
-                    name.strip() for name in admin.split(",")
-                ]:
-                    logging.info(
-                        f"Admin command attempted whilst not admin by {message.author.name}"
-                    )
-                    return await message.channel.send(
-                        "You must be admin to use these commands"
-                    )
-
-                # Execute the command
-                return await func(self, message, *args, **kwargs)
-
-            except Exception as e:
-                # Log the detailed error
-                logging.error(
-                    f"Error executing command '{command_name}': {str(e)}", exc_info=True
-                )
-
-                # Provide sanitized feedback in the channel
-                await message.channel.send(
-                    "Command execution failed. Check logs for details."
-                )
-
-        # Register the command
-        admin_commands[COMMAND_PREFIX + command_name] = wrapper
-        return wrapper
-
-    return decorator
 
 
 # declare a new class that inherits the discord client class
@@ -88,12 +58,26 @@ class Faebot(discord.Client):
         self.conversations: dict[str, dict[str, Any]] = {}
         self.retries: dict[str, int] = {}
         self.model: str = model
+        self.debug_prompts = env == "dev"  # Store debug state in the bot instance
+
+        # Add queue for handling concurrent requests
+        self.pending_responses: dict[str, asyncio.Task] = {}
+        self.session: Optional[aiohttp.ClientSession] = None
+
         super().__init__(intents=intents)
 
     async def on_ready(self):
         """runs when bot is ready"""
+        # Create a shared aiohttp session for async requests
+        self.session = aiohttp.ClientSession()
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
+
+    async def close(self):
+        """Close the bot and clean up resources"""
+        if self.session:
+            await self.session.close()
+        await super().close()
 
     async def on_message(self, message):
         """Handles what happens when the bot receives a message"""
@@ -107,7 +91,6 @@ class Faebot(discord.Client):
                 return
 
         # initialise conversation holder
-        self.conversation: list[str] = []
         conversation_id = str(message.channel.id)
 
         # detect and handle admin commands
@@ -189,28 +172,65 @@ class Faebot(discord.Client):
         """Initialize a new conversation"""
         # Use the conversation_id from the parameter
         # initialize conversation
-        self.conversations[conversation_id] = {
-            "id": conversation_id,
-            "conversation": self.conversation,
-            "conversants": [],
-            "history_length": 69,
-            "reply_frequency": 0,
-            "name": "",
-            "prompt": INITIAL_PROMPT,  # Add conversation-specific prompt
-            "model": self.model,  # Add conversation-specific model
-        }
 
-        ## assign parameters based on dm or text channel
+        # Prepare base prompt with context information
         if message.channel.type[0] == "text":
-            self.conversations[conversation_id]["name"] = str(message.channel.name)
-            self.conversations[conversation_id]["reply_frequency"] = 0.2
+            # For server channels
+            server_name = message.guild.name if message.guild else "Unknown Server"
+            channel_name = message.channel.name
+
+            # Get channel topic if available
+            topic_text = ""
+            if hasattr(message.channel, "topic") and message.channel.topic:
+                topic_text = f"{message.channel.topic}"
+
+            # Replace placeholders in the prompt
+            context_prompt = INITIAL_PROMPT.replace(PLACEHOLDER_SERVER, server_name)
+            context_prompt = context_prompt.replace(PLACEHOLDER_CHANNEL, channel_name)
+            context_prompt = context_prompt.replace(PLACEHOLDER_TOPIC, topic_text)
+            context_prompt = context_prompt.replace(
+                PLACEHOLDER_CONVERSANTS, str(message.author.name)
+            )
+
+            reply_frequency = 0.05
+
         elif message.channel.type[0] == "private":
-            self.conversations[conversation_id]["name"] = str(message.author.name)
-            self.conversations[conversation_id]["reply_frequency"] = 1
+            # For direct messages
+            author_name = str(message.author.name)
+
+            # Use DM prompt template and replace author placeholder
+            context_prompt = DM_PROMPT.replace(PLACEHOLDER_CONVERSANTS, author_name)
+
+            reply_frequency = 1
         else:
             return await message.channel.send(
                 "Unknown channel type. Unable to proceed. Please contact administrator"
             )
+
+        # initialize conversation
+        self.conversations[conversation_id] = {
+            "id": conversation_id,
+            "conversation": [],
+            "conversants": [str(message.author.name)],
+            "history_length": 69,
+            "reply_frequency": reply_frequency,
+            "name": str(message.channel.name)
+            if message.channel.type[0] == "text"
+            else str(message.author.name),
+            "prompt": context_prompt,  # Use the contextual prompt
+            "model": self.model,  # Add conversation-specific model
+            # Store original metadata for placeholder replacement
+            "server_name": message.guild.name
+            if hasattr(message, "guild") and message.guild
+            else "",
+            "channel_name": message.channel.name
+            if message.channel.type[0] == "text"
+            else "",
+            "channel_topic": message.channel.topic
+            if hasattr(message.channel, "topic")
+            else "",
+        }
+
         logging.info(
             f"Initialized new conversation {self.conversations[conversation_id]['name']} with ID {conversation_id}."
         )
@@ -219,9 +239,7 @@ class Faebot(discord.Client):
         )
 
     async def _handle_conversation(self, message, conversation_id):
-        """Handle regular conversation messages"""
-        # load conversation from history
-        self.conversation = self.conversations[conversation_id]["conversation"]
+        """Handle regular conversation messages with improved concurrency"""
 
         # check if we should respond to the message
         should_respond = await self._should_respond_to_message(message, conversation_id)
@@ -229,38 +247,74 @@ class Faebot(discord.Client):
             return
 
         # populate prompt with conversation history and timestamp
-        author = message.author.name
         current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
         prompt = (
             self.conversations[conversation_id]["prompt"]
-            + "\n".join(self.conversation)
-            + f"\n[{current_time}] {author}: {message.content}\nfaebot:"
+            + "\n".join(self.conversations[conversation_id]["conversation"])
+            + f"\n[{current_time}] faebot:"
         )
 
-        # Generate a response
-        async with message.channel.typing():
-            reply = await self._generate_reply(prompt, message, author, conversation_id)
+        # Create a typing indicator that will continue until response is ready
+        typing_task = asyncio.create_task(self._send_typing_indicator(message.channel))
+
+        # Start generating the reply in the background
+        response_task = asyncio.create_task(
+            self._generate_reply(prompt, message, conversation_id)
+        )
+
+        # Store the task for potential cancellation or monitoring
+        self.pending_responses[conversation_id] = response_task
+
+        # Wait for the response while showing typing indicator
+        try:
+            reply = await response_task
+            typing_task.cancel()  # Stop typing indicator when response is ready
+
             if not reply:
                 return
 
-        # Log the bot's reply with timestamp
-        self.conversation.append(f"[{current_time}] faebot: {reply}")
-        self.conversations[conversation_id]["conversation"] = self.conversation
+            # Log the bot's reply with timestamp
+            self.conversations[conversation_id]["conversation"].append(
+                f"[{current_time}] faebot: {reply}"
+            )
 
-        logging.info(
-            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
-            f"\nthere are currently {len(self.conversations.items())} conversations in memory"
-        )
+            logging.info(
+                f"conversation is currently {len(self.conversations[conversation_id]['conversation'])} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
+                f"\nthere are currently {len(self.conversations.items())} conversations in memory"
+            )
 
-        # Send the reply
-        return await message.channel.send(reply)
+            # Send the reply
+            return await message.channel.send(reply)
 
-    async def _generate_reply(self, prompt, message, author, conversation_id):
+        except Exception as e:
+            typing_task.cancel()
+            logging.error(f"Error handling conversation: {e}")
+            return await message.channel.send(
+                "An error occurred while generating a response."
+            )
+        finally:
+            # Clean up the task reference
+            if conversation_id in self.pending_responses:
+                del self.pending_responses[conversation_id]
+
+    async def _send_typing_indicator(self, channel):
+        """Continuously send typing indicator until cancelled"""
+        try:
+            while True:
+                async with channel.typing():
+                    await asyncio.sleep(
+                        5
+                    )  # Discord typing indicator lasts about 10 seconds
+        except asyncio.CancelledError:
+            # Task was cancelled, which is expected when the response is ready
+            pass
+
+    async def _generate_reply(self, prompt, message, conversation_id):
         """Generate a reply using the AI model, with retry logic"""
         retries = self.retries.get(conversation_id, 0)
         model = self.conversations[conversation_id]["model"]
         try:
-            reply = self._generate_ai_response(prompt, author, model)
+            reply = await self._generate_ai_response(prompt, model, conversation_id)
             self.retries[conversation_id] = 0
             return reply
         except Exception as e:
@@ -268,12 +322,17 @@ class Faebot(discord.Client):
                 f"Error generating reply for conversation {conversation_id}: {e}"
             )
             # If there's an error, we log it and retry with a reduced prompt
-            logging.info(
-                f"could not generate. Reducing prompt size and retrying. Conversation is currently {len(self.conversation)} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
+            conversation_length = len(
+                self.conversations.get(conversation_id, {}).get("conversation", [])
             )
-            self.conversations[conversation_id]["conversation"] = self.conversation[2:]
+            logging.info(
+                f"could not generate. Reducing prompt size and retrying. Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
+            )
+            self.conversations[conversation_id]["conversation"] = self.conversations[
+                conversation_id
+            ]["conversation"][2:]
             if retries < 1:
-                await asyncio.sleep(retries * 1000)
+                await asyncio.sleep(retries * 10)
                 self.retries[conversation_id] = retries + 1
                 # Note: We're returning None here as we'll retry with on_message
                 return None
@@ -285,55 +344,67 @@ class Faebot(discord.Client):
             )
             return None
 
-    def _generate_ai_response(
-        self, prompt: str = "", author="", model="meta/meta-llama-3-70b-instruct"
+    async def _generate_ai_response(
+        self,
+        prompt: str = "",
+        model="google/gemini-2.0-flash-001",
+        conversation_id=None,
     ) -> str:
-        """Generates AI-powered responses using the Replicate API with the specified model"""
+        """Generates AI-powered responses using the OpenRouter API with the specified model - now async"""
 
-        if debug_prompts:
+        if self.debug_prompts:
             logging.info("generating reply with model: " + model)
             logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
 
-        output = replicate.run(
-            model,
-            input={
-                "debug": debug_prompts,  # Also pass debug state to model
-                "top_k": 50,
-                "top_p": 1,
-                "prompt": prompt,
-                "temperature": 0.7,
-                # "system_prompt": INITIAL_PROMPT,
-                "max_new_tokens": 250,
-                "min_new_tokens": -1,
-            },
-        )
-        response = "".join(output)
-        return response
+        system_prompt = self.conversations[conversation_id]["prompt"]
 
-    async def _handle_conversation_reply(
-        self, message, reply, author, conversation_id, prompt=""
-    ):
-        """Save the conversation history"""
-        # If it returns an empty reply, clear memory and provide default response
-        if not reply:
-            reply = "I don't know what to say"
-            logging.info("clearing self.conversation")
-            self.conversation = []
-            self.conversations[conversation_id]["conversation"] = self.conversation
-            return await message.channel.send(reply)
+        # Create a proper message structure
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
 
-        # Log the conversation
-        logging.info(f"sending reply: '{reply}' \n and logging into conversation")
-        self.conversation.append(f"{author}: {message.content}")
-        self.conversation.append(f"faebot-dev: {reply}")
-        self.conversations[conversation_id]["conversation"] = self.conversation
+        try:
+            # Use aiohttp for async HTTP requests
+            if not self.session:
+                self.session = aiohttp.ClientSession()
 
-        logging.info(
-            f"conversation is currently {len(self.conversation)} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
-            f"\nthere are currently {len(self.conversations.items())} conversations in memory"
-        )
+            async with self.session.post(
+                url="https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
+                    "HTTP-Referer": os.getenv(
+                        "SITE_URL", "https://github.com/transfaeries/faebot-discord"
+                    ),
+                    "X-Title": "Faebot Discord",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 250,
+                    "stop": ["[20"],
+                },
+            ) as response:
+                result = await response.json()
 
-        return reply
+                if self.debug_prompts:
+                    logging.info(f"OpenRouter API response: {result}")
+
+                # Extract the assistant's message content
+                if "choices" in result and len(result["choices"]) > 0:
+                    reply = result["choices"][0]["message"]["content"]
+                    return reply
+                else:
+                    logging.error(
+                        f"Unexpected response format from OpenRouter: {result}"
+                    )
+                    return "I couldn't generate a response. Please try again."
+
+        except Exception as e:
+            logging.error(f"Error in OpenRouter API call: {e}")
+            return "Sorry, I encountered an error while trying to respond."
 
     async def _should_respond_to_message(self, message, conversation_id):
         """Determine if the bot should respond based on specified criteria"""
@@ -341,7 +412,7 @@ class Faebot(discord.Client):
 
         # Get reply frequency from conversation settings
         reply_frequency = self.conversations[conversation_id].get(
-            "reply_frequency", 0.2
+            "reply_frequency", 0.05
         )
 
         # Check for mentions
@@ -377,159 +448,6 @@ class Faebot(discord.Client):
         )
         # If none of the conditions are met, do not respond
         return False
-
-    @admin_command("conversations")
-    async def _list_conversations(
-        self, message, message_tokens=None, conversation_id=None
-    ):
-        """List all conversations in memory"""
-        if len(self.conversations) == 0:
-            logging.info("asked to list conversations but there are none")
-            return await message.channel.send("there are no conversations in memory")
-        # Create a formatted string of conversations
-        reply = "here are the conversations I have in memory:\n"
-        for x in self.conversations.keys():
-            reply = (
-                reply
-                + str(self.conversations[x]["id"])
-                + " - "
-                + str(self.conversations[x]["name"])
-                + " - "
-                + str(len(self.conversations[x]["conversation"]))
-                + "\n"
-            )
-        return await message.channel.send(reply)
-
-    @admin_command("invite")
-    async def _invite_conversation(
-        self, message, message_tokens=None, conversation_id=None
-    ):
-        """initialises a conversation in a non dm channel"""
-        return await self._initialize_conversation(
-            message, message_tokens=message_tokens, conversation_id=conversation_id
-        )
-
-    @admin_command("forget")
-    async def _forget_conversation(self, message, message_tokens, conversation_id):
-        """Forget a conversation by clearing its memory"""
-        # Check if there are conversations to forget
-        if len(self.conversations) == 0:
-            logging.info(
-                f"asked to clear memory, but there are no conversations. Message was {message.content}"
-            )
-            return await message.channel.send("there are no conversations to forget")
-
-        # Determine which conversation to forget
-        to_forget = None
-
-        # If no conversation ID provided, use current
-        if len(message_tokens) < 2:
-            to_forget = conversation_id
-            logging.info(
-                f"asked to forget without providing a conversation id, using current conversation {conversation_id}"
-            )
-        # If ID provided, validate it
-        else:
-            provided_id = message_tokens[1]
-            if provided_id in self.conversations:
-                to_forget = provided_id
-            else:
-                logging.info(
-                    f"asked to forget conversation {provided_id}, but it does not exist. Message was {message.content}"
-                )
-                return await message.channel.send(
-                    f"Conversation ID '{provided_id}' does not exist. Please provide a valid conversation ID."
-                )
-
-        # Clear the conversation from memory
-        self.conversation = []
-        self.conversations[to_forget]["conversation"] = self.conversation
-
-        logging.info(f"clearing memory from admin prompt in conversation {to_forget}")
-        return await message.channel.send(f"cleared conversation {to_forget}")
-
-    @admin_command("help")
-    async def _admin_help(self, message, message_tokens=None, conversation_id=None):
-        """Show available admin commands"""
-        commands = list(admin_commands.keys())
-        help_text = "Available admin commands:\n"
-        for cmd in commands:
-            doc = admin_commands[cmd].__doc__ or "No description"
-            help_text += f"- `{cmd}`: {doc}\n"
-        return await message.channel.send(help_text)
-
-    @admin_command("model")
-    async def _set_or_return_model(
-        self, message, message_tokens=None, conversation_id=None
-    ):
-        """sets the model to use for generating responses or returns the current model name"""
-        if len(message_tokens) > 1:
-            new_model = message_tokens[1]
-            logging.info(
-                f"Changing model for conversation {conversation_id} from {self.conversations[conversation_id]['model']} to {new_model}"
-            )
-            self.conversations[conversation_id]["model"] = new_model
-            return await message.channel.send(f"Model changed to: {new_model}")
-        else:
-            current_model = self.conversations[conversation_id]["model"]
-            return await message.channel.send(f"Current model is: {current_model}")
-
-    @admin_command("frequency")
-    async def _set_reply_frequency(self, message, message_tokens, conversation_id):
-        """Set or get reply frequency (0-1) for current conversation"""
-        if len(message_tokens) > 1:
-            try:
-                new_freq = float(message_tokens[1])
-                if not 0 <= new_freq <= 1:
-                    return await message.channel.send(
-                        "Frequency must be between 0 and 1"
-                    )
-                self.conversations[conversation_id]["reply_frequency"] = new_freq
-                return await message.channel.send(f"Reply frequency set to: {new_freq}")
-            except ValueError:
-                return await message.channel.send(
-                    "Please provide a valid number between 0 and 1"
-                )
-        else:
-            current_freq = self.conversations[conversation_id]["reply_frequency"]
-            return await message.channel.send(
-                f"Current reply frequency: {current_freq}"
-            )
-
-    @admin_command("history")
-    async def _set_history_length(self, message, message_tokens, conversation_id):
-        """Set or get maximum history length for current conversation"""
-        if len(message_tokens) > 1:
-            try:
-                new_length = int(message_tokens[1])
-                if new_length < 1:
-                    return await message.channel.send("History length must be positive")
-                self.conversations[conversation_id]["history_length"] = new_length
-                return await message.channel.send(
-                    f"History length set to: {new_length}"
-                )
-            except ValueError:
-                return await message.channel.send(
-                    "Please provide a valid positive integer"
-                )
-        else:
-            current_length = self.conversations[conversation_id]["history_length"]
-            return await message.channel.send(
-                f"Current history length: {current_length}"
-            )
-
-    @admin_command("prompt")
-    async def _set_conversation_prompt(
-        self, message, message_tokens=None, conversation_id=None
-    ):
-        """Set or get the prompt for the current conversation"""
-        if len(message_tokens) > 1:
-            new_prompt = " ".join(message_tokens[1:])
-            self.conversations[conversation_id]["prompt"] = new_prompt
-            return await message.channel.send(f"Prompt set to: {new_prompt}")
-        else:
-            current_prompt = self.conversations[conversation_id]["prompt"]
-            return await message.channel.send(f"Current prompt: {current_prompt}")
 
 
 # intents for the discordbot

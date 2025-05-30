@@ -6,6 +6,8 @@ kill_timeout = 5
 processes = []
 
 [env]
+  ENVIRONMENT = "prod"
+
 
 [experimental]
   auto_rollback = true
