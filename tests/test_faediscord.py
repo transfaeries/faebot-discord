@@ -1,13 +1,10 @@
 import pytest
-import asyncio
 import os
 from unittest.mock import AsyncMock, Mock, patch
+from faediscord import Faebot, COMMAND_PREFIX, DEFAULT_PROMPT, DM_PROMPT, DEV_PROMPT
 import sys
-import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from faediscord import Faebot, COMMAND_PREFIX, DEFAULT_PROMPT, DM_PROMPT, DEV_PROMPT
 
 
 class TestFaebot:

@@ -5,8 +5,8 @@ all: lint format static_type_check test
 
 # Run tests with pytest
 test:
-	@echo "Running tests..."
-	poetry run pytest -v tests/
+	@echo "Running tests with coverage..."
+	poetry run pytest -v tests/ --cov=. --cov-report=term-missing
 
 # Run linting with flake8
 lint:

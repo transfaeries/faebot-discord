@@ -1,4 +1,4 @@
-## Faediscordbot is a general purpose discord bot using discord.py
+# Faediscordbot is a general purpose discord bot using discord.py
 # which reads and responds to messages on a discord server.
 
 import os
@@ -32,12 +32,19 @@ PLACEHOLDER_TOPIC = "{topic}"
 PLACEHOLDER_CONVERSANTS = "{conversants}"
 
 # Initialize the base prompts with placeholders
-DEFAULT_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness. I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
-
+DEFAULT_PROMPT = (
+    f"I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord."
+    f"I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness."
+    f"I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
+)
 DM_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate I'm chatting privately on discord with {PLACEHOLDER_CONVERSANTS}. Here's the conversation we had:\n\n"
 
 # Development environment prompt
-DEV_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate currently running in development mode. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
+DEV_PROMPT = (
+    f"I'm Faebot, the transfaeries' AI systemmate currently running in development mode."
+    f"I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}."
+    f" I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
+)
 # Set initial prompt based on environment
 if env == "dev":
     # Development environment settings
@@ -273,7 +280,8 @@ class Faebot(discord.Client):
             )
 
             logging.info(
-                f"conversation is currently {len(self.conversations[conversation_id]['conversation'])} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
+                f"conversation is currently {len(self.conversations[conversation_id]['conversation'])} messages long and the prompt is {len(prompt)}."
+                f"There are {len(self.conversations[conversation_id]['conversants'])} conversants."
                 f"\nthere are currently {len(self.conversations.items())} conversations in memory"
             )
 
@@ -320,7 +328,8 @@ class Faebot(discord.Client):
                 self.conversations.get(conversation_id, {}).get("conversation", [])
             )
             logging.info(
-                f"could not generate. Reducing prompt size and retrying. Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
+                f"could not generate. Reducing prompt size and retrying."
+                f"Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
             )
 
             # Manually trim by 2 messages for retries
