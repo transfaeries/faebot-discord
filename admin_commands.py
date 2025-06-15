@@ -271,7 +271,7 @@ async def _set_conversation_prompt(
     {server} - Server name
     {channel} - Channel name
     {topic} - Channel topic
-    {author} - Message author name
+    {conversants} - People in the conversation
     """
     target_id = conversation_id
 

@@ -1,13 +1,10 @@
 import os
 import sys
 import pytest
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
-import logging
-import discord
+from unittest.mock import AsyncMock, patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from admin_commands import (
+from admin_commands import (  # noqa: E402
     admin_command,
     admin_commands,
     COMMAND_PREFIX,
@@ -56,6 +53,9 @@ class TestAdminCommands:
                 "reply_frequency": 0.5,
                 "history_length": 50,
                 "prompt": "Test prompt",
+                "channel_name": "test-channel",
+                "server_name": "test-server",
+                "channel_topic": "test-topic",
             },
             "789012": {
                 "id": "789012",
@@ -100,7 +100,7 @@ class TestAdminCommands:
         """Test listing conversations when there are some"""
         mock_bot = setup_test_conversation
 
-        result = await _list_conversations(mock_bot, mock_message)
+        await _list_conversations(mock_bot, mock_message)
 
         mock_message.channel.send.assert_called_once()
         call_args = mock_message.channel.send.call_args[0][0]
@@ -127,9 +127,7 @@ class TestAdminCommands:
     @patch("admin_commands.admin", "test_admin")  # Mock the admin env variable
     async def test_forget_conversation_empty(self, mock_bot, mock_message):
         """Test forgetting a conversation when there are none"""
-        result = await _forget_conversation(
-            mock_bot, mock_message, ["forget"], "123456"
-        )
+        await _forget_conversation(mock_bot, mock_message, ["forget"], "123456")
 
         mock_message.channel.send.assert_called_once_with(
             "there are no conversations to forget"
@@ -147,9 +145,7 @@ class TestAdminCommands:
         # Set up the bot's conversation attribute
         mock_bot.conversation = []  # This needs to be initialized
 
-        result = await _forget_conversation(
-            mock_bot, mock_message, ["forget"], conversation_id
-        )
+        await _forget_conversation(mock_bot, mock_message, ["forget"], conversation_id)
 
         # Check that the conversation was cleared
         assert mock_bot.conversations[conversation_id]["conversation"] == []
@@ -168,7 +164,7 @@ class TestAdminCommands:
         target_id = "789012"  # Target to forget
         mock_message.content = f"{COMMAND_PREFIX}forget {target_id}"
 
-        result = await _forget_conversation(
+        await _forget_conversation(
             mock_bot, mock_message, ["forget", target_id], conversation_id
         )
 
@@ -189,7 +185,7 @@ class TestAdminCommands:
         invalid_id = "999999"
         mock_message.content = f"{COMMAND_PREFIX}forget {invalid_id}"
 
-        result = await _forget_conversation(
+        await _forget_conversation(
             mock_bot, mock_message, ["forget", invalid_id], conversation_id
         )
 
@@ -201,7 +197,7 @@ class TestAdminCommands:
     @patch("admin_commands.admin", "test_admin")  # Mock the admin env variable
     async def test_admin_help(self, mock_bot, mock_message):
         """Test the admin help command"""
-        result = await _admin_help(mock_bot, mock_message)
+        await _admin_help(mock_bot, mock_message)
 
         mock_message.channel.send.assert_called_once()
         call_args = mock_message.channel.send.call_args[0][0]
@@ -216,7 +212,7 @@ class TestAdminCommands:
         new_model = "new-model-name"
         mock_message.content = f"{COMMAND_PREFIX}model {new_model}"
 
-        result = await _set_or_return_model(
+        await _set_or_return_model(
             mock_bot, mock_message, ["model", new_model], conversation_id
         )
 
@@ -233,9 +229,7 @@ class TestAdminCommands:
         conversation_id = "123456"
         current_model = mock_bot.conversations[conversation_id]["model"]
 
-        result = await _set_or_return_model(
-            mock_bot, mock_message, ["model"], conversation_id
-        )
+        await _set_or_return_model(mock_bot, mock_message, ["model"], conversation_id)
 
         mock_message.channel.send.assert_called_once_with(
             f"Current model for conversation {conversation_id}: {current_model}"
@@ -253,7 +247,7 @@ class TestAdminCommands:
         new_model = "new-model-name"
         mock_message.content = f"{COMMAND_PREFIX}model {target_id} {new_model}"
 
-        result = await _set_or_return_model(
+        await _set_or_return_model(
             mock_bot, mock_message, ["model", target_id, new_model], conversation_id
         )
 
@@ -270,7 +264,7 @@ class TestAdminCommands:
         assert mock_bot.debug_prompts is False
 
         # First toggle (False -> True)
-        result = await _toggle_debug_mode(mock_bot, mock_message)
+        await _toggle_debug_mode(mock_bot, mock_message)
         assert mock_bot.debug_prompts is True
         mock_message.channel.send.assert_called_with("Debug mode is now: on")
 
@@ -278,7 +272,7 @@ class TestAdminCommands:
         mock_message.channel.send.reset_mock()
 
         # Second toggle (True -> False)
-        result = await _toggle_debug_mode(mock_bot, mock_message)
+        await _toggle_debug_mode(mock_bot, mock_message)
         assert mock_bot.debug_prompts is False
         mock_message.channel.send.assert_called_with("Debug mode is now: off")
 
@@ -292,7 +286,7 @@ class TestAdminCommands:
         mock_message.content = f"{COMMAND_PREFIX}frequency {new_frequency}"
 
         # Test the function
-        result = await _set_reply_frequency(
+        await _set_reply_frequency(
             mock_bot, mock_message, ["frequency", new_frequency], conversation_id
         )
 
@@ -312,7 +306,7 @@ class TestAdminCommands:
         conversation_id = "123456"
         current_frequency = mock_bot.conversations[conversation_id]["reply_frequency"]
 
-        result = await _set_reply_frequency(
+        await _set_reply_frequency(
             mock_bot, mock_message, ["frequency"], conversation_id
         )
 
@@ -329,7 +323,7 @@ class TestAdminCommands:
         new_length = "200"
         mock_message.content = f"{COMMAND_PREFIX}history {new_length}"
 
-        result = await _set_history_length(
+        await _set_history_length(
             mock_bot, mock_message, ["history", new_length], conversation_id
         )
 
@@ -348,9 +342,7 @@ class TestAdminCommands:
         conversation_id = "123456"
         current_length = mock_bot.conversations[conversation_id]["history_length"]
 
-        result = await _set_history_length(
-            mock_bot, mock_message, ["history"], conversation_id
-        )
+        await _set_history_length(mock_bot, mock_message, ["history"], conversation_id)
 
         mock_message.channel.send.assert_called_once_with(
             f"Current history length is set to: {current_length}"
@@ -362,18 +354,19 @@ class TestAdminCommands:
         """Test setting a new prompt for a conversation"""
         mock_bot = setup_test_conversation
         conversation_id = "123456"
-        new_prompt = (
-            "This is a new test prompt with {server} and {channel} placeholders"
+        new_prompt = "New prompt with {server} and {channel} and {topic} placeholders"
+        expected_prompt = (
+            "New prompt with test-server and test-channel and test-topic placeholders"
         )
         mock_message.content = f"{COMMAND_PREFIX}prompt {new_prompt}"
 
-        result = await _set_conversation_prompt(
+        await _set_conversation_prompt(
             mock_bot, mock_message, ["prompt", new_prompt], conversation_id
         )
 
-        assert mock_bot.conversations[conversation_id]["prompt"] == new_prompt
+        assert mock_bot.conversations[conversation_id]["prompt"] == expected_prompt
         mock_message.channel.send.assert_called_once_with(
-            f"Prompt updated for conversation {conversation_id}"
+            f"Prompt set for conversation {conversation_id}: {expected_prompt}"
         )
 
     @pytest.mark.asyncio
@@ -384,7 +377,7 @@ class TestAdminCommands:
         conversation_id = "123456"
         current_prompt = mock_bot.conversations[conversation_id]["prompt"]
 
-        result = await _set_conversation_prompt(
+        await _set_conversation_prompt(
             mock_bot, mock_message, ["prompt"], conversation_id
         )
 
