@@ -1,10 +1,10 @@
-## Faediscordbot is a general purpose discord bot using discord.py
+# Faediscordbot is a general purpose discord bot using discord.py
 # which reads and responds to messages on a discord server.
 
 import os
 import logging
 import random
-from typing import Any
+from typing import Any, Dict
 import asyncio
 import discord
 from typing import Optional
@@ -32,12 +32,19 @@ PLACEHOLDER_TOPIC = "{topic}"
 PLACEHOLDER_CONVERSANTS = "{conversants}"
 
 # Initialize the base prompts with placeholders
-DEFAULT_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness. I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
-
+DEFAULT_PROMPT = (
+    f"I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord."
+    f"I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness."
+    f"I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
+)
 DM_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate I'm chatting privately on discord with {PLACEHOLDER_CONVERSANTS}. Here's the conversation we had:\n\n"
 
 # Development environment prompt
-DEV_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate currently running in development mode. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
+DEV_PROMPT = (
+    f"I'm Faebot, the transfaeries' AI systemmate currently running in development mode."
+    f"I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}."
+    f" I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
+)
 # Set initial prompt based on environment
 if env == "dev":
     # Development environment settings
@@ -55,13 +62,13 @@ class Faebot(discord.Client):
 
     def __init__(self, intents) -> None:
         # initialise conversation logging
-        self.conversations: dict[str, dict[str, Any]] = {}
-        self.retries: dict[str, int] = {}
+        self.conversations: Dict[str, Dict[str, Any]] = {}
+        self.retries: Dict[str, int] = {}
         self.model: str = model
         self.debug_prompts = env == "dev"  # Store debug state in the bot instance
 
         # Add queue for handling concurrent requests
-        self.pending_responses: dict[str, asyncio.Task] = {}
+        self.pending_responses: Dict[str, asyncio.Task] = {}
         self.session: Optional[aiohttp.ClientSession] = None
 
         super().__init__(intents=intents)
@@ -103,15 +110,6 @@ class Faebot(discord.Client):
             if author not in self.conversations[conversation_id]["conversants"]:
                 self.conversations[conversation_id]["conversants"].append(author)
 
-            # Trim memory if too full
-            if (
-                len(self.conversations[conversation_id]["conversation"])
-                > self.conversations[conversation_id]["history_length"]
-            ):
-                self.conversations[conversation_id][
-                    "conversation"
-                ] = self.conversations[conversation_id]["conversation"][2:]
-
             # If message is a reply, log the referenced message first if we don't have it
             if (
                 hasattr(message, "reference")
@@ -138,6 +136,9 @@ class Faebot(discord.Client):
                 self.conversations[conversation_id]["conversation"].append(
                     f"[{current_time}] {author}: {message.content}"
                 )
+
+            # Use our helper function to trim the conversation if needed
+            self._trim_conversation_history(conversation_id)
 
             # Handle reply if needed
             return await self._handle_conversation(message, conversation_id)
@@ -279,7 +280,8 @@ class Faebot(discord.Client):
             )
 
             logging.info(
-                f"conversation is currently {len(self.conversations[conversation_id]['conversation'])} messages long and the prompt is {len(prompt)}. There are {len(self.conversations[conversation_id]['conversants'])} conversants."
+                f"conversation is currently {len(self.conversations[conversation_id]['conversation'])} messages long and the prompt is {len(prompt)}."
+                f"There are {len(self.conversations[conversation_id]['conversants'])} conversants."
                 f"\nthere are currently {len(self.conversations.items())} conversations in memory"
             )
 
@@ -326,11 +328,19 @@ class Faebot(discord.Client):
                 self.conversations.get(conversation_id, {}).get("conversation", [])
             )
             logging.info(
-                f"could not generate. Reducing prompt size and retrying. Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
+                f"could not generate. Reducing prompt size and retrying."
+                f"Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
             )
-            self.conversations[conversation_id]["conversation"] = self.conversations[
-                conversation_id
-            ]["conversation"][2:]
+
+            # Manually trim by 2 messages for retries
+            if (
+                conversation_id in self.conversations
+                and len(self.conversations[conversation_id]["conversation"]) >= 2
+            ):
+                self.conversations[conversation_id][
+                    "conversation"
+                ] = self.conversations[conversation_id]["conversation"][2:]
+
             if retries < 1:
                 await asyncio.sleep(retries * 10)
                 self.retries[conversation_id] = retries + 1
@@ -395,7 +405,7 @@ class Faebot(discord.Client):
                 # Extract the assistant's message content
                 if "choices" in result and len(result["choices"]) > 0:
                     reply = result["choices"][0]["message"]["content"]
-                    return reply
+                    return str(reply)
                 else:
                     logging.error(
                         f"Unexpected response format from OpenRouter: {result}"
@@ -449,11 +459,33 @@ class Faebot(discord.Client):
         # If none of the conditions are met, do not respond
         return False
 
+    def _trim_conversation_history(self, conversation_id):
+        """
+        Trim conversation history to match the specified history_length.
+        This ensures memory management is consistent throughout the bot.
+        """
+        if conversation_id not in self.conversations:
+            return
+
+        history_length = self.conversations[conversation_id]["history_length"]
+        current_length = len(self.conversations[conversation_id]["conversation"])
+
+        # Trim to exactly history_length
+        if current_length > history_length:
+            excess = current_length - history_length
+            self.conversations[conversation_id]["conversation"] = self.conversations[
+                conversation_id
+            ]["conversation"][excess:]
+            logging.debug(
+                f"Trimmed conversation {conversation_id} from {current_length} to {history_length} messages"
+            )
+
 
 # intents for the discordbot
 intents = discord.Intents.default()
 intents.message_content = True
 
 # instantiate and run the bot
-client = Faebot(intents=intents)
-client.run(os.getenv("DISCORD_TOKEN", ""))
+if __name__ == "__main__":
+    client = Faebot(intents=intents)
+    client.run(os.getenv("DISCORD_TOKEN", ""))

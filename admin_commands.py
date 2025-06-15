@@ -223,22 +223,17 @@ async def _set_reply_frequency(bot, message, message_tokens, conversation_id):
 async def _set_history_length(bot, message, message_tokens, conversation_id):
     """Set or get maximum history length for a conversation. Usage: fae;history [conversation_id] [length]"""
     target_id = conversation_id
+    length_index = 1
+    # Default to current conversation if no ID provided
 
     # Check if first argument is a conversation ID
     if len(message_tokens) > 1:
         potential_conv_id = message_tokens[1]
         if potential_conv_id in bot.conversations:
             target_id = potential_conv_id
-            message_tokens = [message_tokens[0]] + message_tokens[2:]
-        elif potential_conv_id.isdigit():
-            logging.debug(
-                f"Admin {message.author.name} attempted to access non-existent conversation {potential_conv_id}"
-            )
-            return await message.channel.send(
-                f"Conversation {potential_conv_id} not found"
-            )
+            length_index = 2
 
-    if len(message_tokens) > 1:
+    if len(message_tokens) > length_index:
         try:
             new_length = int(message_tokens[1])
             if new_length < 1:
@@ -262,7 +257,7 @@ async def _set_history_length(bot, message, message_tokens, conversation_id):
             f"Admin {message.author.name} queried history length for conversation {target_id}: {current_length}"
         )
         return await message.channel.send(
-            f"Current history length for conversation {target_id}: {current_length}"
+            f"Current history length is set to: {current_length}"
         )
 
 
@@ -276,7 +271,7 @@ async def _set_conversation_prompt(
     {server} - Server name
     {channel} - Channel name
     {topic} - Channel topic
-    {author} - Message author name
+    {conversants} - People in the conversation
     """
     target_id = conversation_id
 
