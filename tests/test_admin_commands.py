@@ -194,7 +194,7 @@ class TestAdminCommands:
         )
 
         mock_message.channel.send.assert_called_once_with(
-            f"I don't have a conversation with ID {invalid_id}"
+            f"Conversation ID '{invalid_id}' does not exist. Please provide a valid conversation ID."
         )
 
     @pytest.mark.asyncio
@@ -238,7 +238,7 @@ class TestAdminCommands:
         )
 
         mock_message.channel.send.assert_called_once_with(
-            f"Current model is: {current_model} for conversation {conversation_id}"
+            f"Current model for conversation {conversation_id}: {current_model}"
         )
 
     @pytest.mark.asyncio
@@ -301,7 +301,7 @@ class TestAdminCommands:
             new_frequency
         )
         mock_message.channel.send.assert_called_once_with(
-            f"Reply frequency set to {new_frequency} for conversation {conversation_id}"
+            f"Reply frequency set to: {new_frequency} for conversation {conversation_id}"
         )
 
     @pytest.mark.asyncio
@@ -317,7 +317,7 @@ class TestAdminCommands:
         )
 
         mock_message.channel.send.assert_called_once_with(
-            f"Current reply frequency is {current_frequency} for conversation {conversation_id}"
+            f"Current reply frequency for conversation {conversation_id}: {current_frequency}"
         )
 
     @pytest.mark.asyncio
@@ -337,7 +337,7 @@ class TestAdminCommands:
             new_length
         )
         mock_message.channel.send.assert_called_once_with(
-            f"History length set to {new_length} for conversation {conversation_id}"
+            f"History length set to: {new_length} for conversation {conversation_id}"
         )
 
     @pytest.mark.asyncio
@@ -353,7 +353,7 @@ class TestAdminCommands:
         )
 
         mock_message.channel.send.assert_called_once_with(
-            f"Current history length is {current_length} for conversation {conversation_id}"
+            f"Current history length is set to: {current_length}"
         )
 
     @pytest.mark.asyncio
