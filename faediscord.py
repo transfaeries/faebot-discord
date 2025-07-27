@@ -395,6 +395,8 @@ class Faebot(discord.Client):
                     "temperature": 0.7,
                     "max_tokens": 250,
                     "stop": ["[20"],
+                    "repetition_penalty": 1.5,
+
                 },
             ) as response:
                 result = await response.json()
