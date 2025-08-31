@@ -8,7 +8,8 @@ from typing import Any, Dict
 import asyncio
 import discord
 from typing import Optional
-import aiohttp  # Add this import
+import aiohttp
+from database import fdb
 
 # Import admin commands
 from admin_commands import admin_commands
@@ -77,13 +78,23 @@ class Faebot(discord.Client):
         """runs when bot is ready"""
         # Create a shared aiohttp session for async requests
         self.session = aiohttp.ClientSession()
+
+        # Initialize database connection
+        await fdb.connect()
+
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
 
     async def close(self):
         """Close the bot and clean up resources"""
+        # Save all conversations before shutting down
+        for conv_id, conv_data in self.conversations.items():
+            await fdb.save_conversation(conv_id, conv_data)
+
         if self.session:
             await self.session.close()
+
+        await fdb.close()
         await super().close()
 
     async def on_message(self, message):
