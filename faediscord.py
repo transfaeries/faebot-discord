@@ -85,18 +85,6 @@ class Faebot(discord.Client):
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
 
-    async def close(self):
-        """Close the bot and clean up resources"""
-        # Save all conversations before shutting down
-        for conv_id, conv_data in self.conversations.items():
-            await fdb.save_conversation(conv_id, conv_data)
-
-        if self.session:
-            await self.session.close()
-
-        await fdb.close()
-        await super().close()
-
     async def on_message(self, message):
         """Handles what happens when the bot receives a message"""
         # don't respond to ourselves
@@ -491,6 +479,18 @@ class Faebot(discord.Client):
             logging.debug(
                 f"Trimmed conversation {conversation_id} from {current_length} to {history_length} messages"
             )
+
+    async def close(self):
+        """Close the bot and clean up resources"""
+        # Save all conversations before shutting down
+        for conv_id, conv_data in self.conversations.items():
+            await fdb.save_conversation(conv_id, conv_data)
+
+        if self.session:
+            await self.session.close()
+
+        await fdb.close()
+        await super().close()
 
 
 # intents for the discordbot
