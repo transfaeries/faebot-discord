@@ -54,8 +54,7 @@ if env == "dev":
 else:
     INITIAL_PROMPT = DEFAULT_PROMPT
 
-COMMAND_PREFIX = "fae;"
-
+COMMAND_PREFIX = "faedev;" if (env == "dev") else "fae;"
 
 # declare a new class that inherits the discord client class
 class Faebot(discord.Client):
@@ -82,6 +81,9 @@ class Faebot(discord.Client):
 
         # Initialize database connection
         await self.fdb.connect()
+
+        # Load existing conversations from database
+        self.conversations = await self.fdb.load_conversations()
 
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")

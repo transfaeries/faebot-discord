@@ -4,10 +4,12 @@ from functools import wraps
 
 # Get environment variables
 admin = os.getenv("ADMIN", "")
+env = os.getenv("ENVIRONMENT", "dev").lower()
+
 
 # Command registry
 admin_commands = {}
-COMMAND_PREFIX = "fae;"  # Should match the one in main file
+COMMAND_PREFIX = "faedev;" if (env == "dev") else "fae;"  # Should match the one in main file
 
 
 def admin_command(command_name):
