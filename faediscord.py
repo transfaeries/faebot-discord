@@ -9,7 +9,7 @@ import asyncio
 import discord
 from typing import Optional
 import aiohttp
-from database import fdb
+from database import FaebotDatabase
 
 # Import admin commands
 from admin_commands import admin_commands
@@ -67,6 +67,7 @@ class Faebot(discord.Client):
         self.retries: Dict[str, int] = {}
         self.model: str = model
         self.debug_prompts = env == "dev"  # Store debug state in the bot instance
+        self.fdb = FaebotDatabase()
 
         # Add queue for handling concurrent requests
         self.pending_responses: Dict[str, asyncio.Task] = {}
@@ -80,7 +81,7 @@ class Faebot(discord.Client):
         self.session = aiohttp.ClientSession()
 
         # Initialize database connection
-        await fdb.connect()
+        await self.fdb.connect()
 
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
@@ -484,12 +485,12 @@ class Faebot(discord.Client):
         """Close the bot and clean up resources"""
         # Save all conversations before shutting down
         for conv_id, conv_data in self.conversations.items():
-            await fdb.save_conversation(conv_id, conv_data)
+            await self.fdb.save_conversation(conv_id, conv_data)
 
         if self.session:
             await self.session.close()
 
-        await fdb.close()
+        await self.fdb.close()
         await super().close()
 
 

@@ -168,7 +168,3 @@ class FaebotDatabase:
                 json.dumps(reactions),
                 message_id,
             )
-
-
-# Create a singleton instance
-fdb = FaebotDatabase()
