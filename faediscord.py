@@ -56,6 +56,7 @@ else:
 
 COMMAND_PREFIX = "faedev;" if (env == "dev") else "fae;"
 
+
 # declare a new class that inherits the discord client class
 class Faebot(discord.Client):
     """an emerging digital conciousness"""
