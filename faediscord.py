@@ -10,6 +10,7 @@ import discord
 import aiohttp
 from database import FaebotDatabase
 from admin_commands import admin_commands
+import time
 
 # set up logging
 logging.basicConfig(
@@ -70,6 +71,9 @@ class Faebot(discord.Client):
         self.pending_responses: Dict[str, asyncio.Task] = {}
         self.session: Optional[aiohttp.ClientSession] = None
 
+        # Track last save per conversation
+        self.last_save_time: dict[str, float] = {}
+
         super().__init__(intents=intents)
 
     async def on_ready(self):
@@ -106,6 +110,21 @@ class Faebot(discord.Client):
 
         # Log message if channel is known, regardless of reply status
         if conversation_id in self.conversations:
+            # Check if we should do a periodic save (every 10 messages or 5 minutes)
+            if conversation_id in self.conversations:
+                conv_length = len(self.conversations[conversation_id]["conversation"])
+                last_save = self.last_save_time.get(conversation_id, 0)
+                time_since_save = time.time() - last_save
+
+                if (
+                    conv_length % 10 == 0 or time_since_save > 300
+                ):  # Every 10 msgs or 5 min
+                    logging.debug(f"Periodic save for {conversation_id}")
+                    await self.fdb.save_conversation(
+                        conversation_id, self.conversations[conversation_id]
+                    )
+                    self.last_save_time[conversation_id] = time.time()
+
             author = message.author.name
             if author not in self.conversations[conversation_id]["conversants"]:
                 self.conversations[conversation_id]["conversants"].append(author)
@@ -171,8 +190,21 @@ class Faebot(discord.Client):
         self, message, message_tokens=None, conversation_id=None
     ):
         """Initialize a new conversation"""
-        # Use the conversation_id from the parameter
-        # initialize conversation
+        # Check if conversation already exists (in memory or database)
+        if conversation_id in self.conversations:
+            logging.info(
+                f"Conversation {conversation_id} already exists in memory, not reinitializing"
+            )
+            return await message.channel.send("*faebot is already here!*")
+
+        # Check database too
+        existing = await self.fdb.get_conversation(conversation_id)
+        if existing:
+            logging.info(
+                f"Loading existing conversation {conversation_id} from database"
+            )
+            self.conversations[conversation_id] = existing
+            return await message.channel.send("*faebot remembers this place*")
 
         # Prepare base prompt with context information
         if message.channel.type[0] == "text":
@@ -286,13 +318,13 @@ class Faebot(discord.Client):
             )
 
             # Send the reply
-            return await message.channel.send(reply)
+            sent_message = await message.channel.send(reply)
 
             # Get last 5 messages as context (excluding the bot's new reply)
             context = self.conversations[conversation_id]["conversation"][
                 -6:-1
             ]  # Last 5 before bot's reply
-            await self.db.save_bot_message(
+            await self.fdb.save_bot_message(
                 conversation_id=conversation_id,
                 content=reply,
                 context=context,
@@ -300,7 +332,8 @@ class Faebot(discord.Client):
             )
 
             # Also save the updated conversation state
-            await self.db.save_conversation(
+            logging.info(f"Saving bot response to database for {conversation_id}")
+            await self.fdb.save_conversation(
                 conversation_id, self.conversations[conversation_id]
             )
 
