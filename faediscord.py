@@ -4,14 +4,11 @@
 import os
 import logging
 import random
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import asyncio
 import discord
-from typing import Optional
 import aiohttp
 from database import FaebotDatabase
-
-# Import admin commands
 from admin_commands import admin_commands
 
 # set up logging
@@ -290,6 +287,24 @@ class Faebot(discord.Client):
 
             # Send the reply
             return await message.channel.send(reply)
+
+            # Get last 5 messages as context (excluding the bot's new reply)
+            context = self.conversations[conversation_id]["conversation"][
+                -6:-1
+            ]  # Last 5 before bot's reply
+            await self.db.save_bot_message(
+                conversation_id=conversation_id,
+                content=reply,
+                context=context,
+                message_id=str(sent_message.id) if sent_message else None,
+            )
+
+            # Also save the updated conversation state
+            await self.db.save_conversation(
+                conversation_id, self.conversations[conversation_id]
+            )
+
+            return sent_message
 
         except Exception as e:
             typing_task.cancel()
