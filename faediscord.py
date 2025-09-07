@@ -378,19 +378,18 @@ class Faebot(discord.Client):
         model="google/gemini-2.0-flash-001",
         conversation_id=None,
     ) -> str:
-        """Generates AI-powered responses using the OpenRouter API with the specified model - now async"""
+        """Generates AI-powered responses using the OpenRouter API with text completion"""
+
+        if not conversation_id or conversation_id not in self.conversations:
+            return "Error: Invalid conversation context"
+
+        # Combine system prompt and conversation into a single text block
+        system_prompt = self.conversations[conversation_id]["prompt"]
+        full_prompt = f"{system_prompt}\n\n{prompt}"
 
         if self.debug_prompts:
             logging.info("generating reply with model: " + model)
-            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
-
-        system_prompt = self.conversations[conversation_id]["prompt"]
-
-        # Create a proper message structure
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ]
+            logging.info(f"\n=== PROMPT START ===\n{full_prompt}\n=== PROMPT END ===\n")
 
         try:
             # Use aiohttp for async HTTP requests
@@ -398,7 +397,7 @@ class Faebot(discord.Client):
                 self.session = aiohttp.ClientSession()
 
             async with self.session.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
+                url="https://openrouter.ai/api/v1/completions",  # Note: changed endpoint
                 headers={
                     "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
                     "HTTP-Referer": os.getenv(
@@ -409,11 +408,11 @@ class Faebot(discord.Client):
                 },
                 json={
                     "model": model,
-                    "messages": messages,
+                    "prompt": full_prompt,
                     "temperature": 0.7,
                     "max_tokens": 250,
                     "stop": ["[20"],
-                    "repetition_penalty": 1.5,
+                    "frequency_penalty": 1.5,  # Note: changed from repetition_penalty
                 },
             ) as response:
                 result = await response.json()
@@ -421,10 +420,10 @@ class Faebot(discord.Client):
                 if self.debug_prompts:
                     logging.info(f"OpenRouter API response: {result}")
 
-                # Extract the assistant's message content
+                # Extract the completion text
                 if "choices" in result and len(result["choices"]) > 0:
-                    reply = result["choices"][0]["message"]["content"]
-                    return str(reply)
+                    reply = result["choices"][0]["text"]  # Note: changed from message.content
+                    return str(reply.strip())
                 else:
                     logging.error(
                         f"Unexpected response format from OpenRouter: {result}"
