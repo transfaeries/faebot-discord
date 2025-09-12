@@ -35,7 +35,7 @@ async def migrate():
         # Create new simplified schema
         await conn.execute(
             """
-            CREATE TABLE conversations (
+            CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 platform TEXT NOT NULL DEFAULT 'discord',
                 conversation_metadata JSONB NOT NULL,
@@ -49,7 +49,7 @@ async def migrate():
         # Bot messages with reaction tracking
         await conn.execute(
             """
-            CREATE TABLE bot_messages (
+            CREATE TABLE IF NOT EXISTS bot_messages (
                 id SERIAL PRIMARY KEY,
                 conversation_id TEXT NOT NULL,
                 message_id TEXT UNIQUE,
@@ -64,7 +64,7 @@ async def migrate():
 
         # Create indexe
         await conn.execute(
-            "CREATE INDEX idx_conversation_created ON bot_messages (conversation_id, created_at DESC)"
+            "CREATE INDEX IF NOT EXISTS idx_conversation_created ON bot_messages (conversation_id, created_at DESC)"
         )
         logging.info("✅ Created indexes")
 
