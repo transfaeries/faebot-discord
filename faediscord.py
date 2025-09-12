@@ -12,17 +12,17 @@ from database import FaebotDatabase
 from admin_commands import admin_commands
 import time
 
-# set up logging
-logging.basicConfig(
-    format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-
 
 model = os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")  # Updated default model
 admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
+
+# set up logging
+logging.basicConfig(
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    level=logging.DEBUG if env == "dev" else logging.INFO,
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 # Define placeholder constants
 PLACEHOLDER_SERVER = "{server}"
