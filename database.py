@@ -160,11 +160,11 @@ class FaebotDatabase:
         raise
     
     @with_retry()
-    async def save_conversation(
+async def save_conversation(
     self,
     conversation_id: str,
     conversation_data: Dict[str, Any],
-    merge_history: bool = True,
+    force_overwrite: bool = False,  
 ):
     """Save or update a conversation's full state"""
     if not self.pool:
@@ -172,7 +172,6 @@ class FaebotDatabase:
         return False
 
     try:
-        # Split conversation data into metadata and history
         metadata = {
             "id": conversation_data["id"],
             "name": conversation_data["name"],
@@ -189,33 +188,48 @@ class FaebotDatabase:
         history = conversation_data.get("conversation", [])
 
         async with self.pool.acquire() as conn:
-            existing_len = 0
-            if merge_history:
-                # Check existing history length
-                existing = await conn.fetchrow(
-                    "SELECT jsonb_array_length(conversation_history) as len FROM conversations WHERE id = $1",
-                    conversation_id,
-                )
-                if existing:
-                    existing_len = existing["len"]
+            # Check if conversation exists
+            existing = await conn.fetchrow(
+                """
+                SELECT 
+                    jsonb_array_length(conversation_history) as len,
+                    conversation_history->-1 as last_message  -- Get last message
+                FROM conversations 
+                WHERE id = $1
+                """,
+                conversation_id,
+            )
 
-            if existing_len > len(history):
-                logging.warning(
-                    f"Not overwriting conversation {conversation_id}: DB has {existing_len} messages, memory has {len(history)}"
-                )
-                # Just update metadata, keep history
-                await conn.execute(
-                    """
-                    UPDATE conversations
-                    SET conversation_metadata = $1, last_updated = CURRENT_TIMESTAMP
-                    WHERE id = $2
-                    """,
-                    json.dumps(metadata),
-                    conversation_id,
-                )
-                logging.info(f"✅ Updated metadata only for conversation {conversation_id}")
-                return True
+            if existing and not force_overwrite:
+                existing_len = existing["len"]
+                
+                # Check if we're potentially losing messages
+                if existing_len > len(history):
+                    # Try to detect if this is a legitimate trim vs data loss
+                    last_db_message = json.loads(existing["last_message"]) if existing["last_message"] else None
+                    
+                    # Check if our history contains the last DB message
+                    if last_db_message and last_db_message not in history:
+                        logging.warning(
+                            f"⚠️ Refusing to save {conversation_id}: "
+                            f"DB has {existing_len} messages, memory has {len(history)}, "
+                            f"and memory doesn't contain last DB message. "
+                            f"This might lose data!"
+                        )
+                        # Just update metadata
+                        await conn.execute(
+                            """
+                            UPDATE conversations
+                            SET conversation_metadata = $1, last_updated = CURRENT_TIMESTAMP
+                            WHERE id = $2
+                            """,
+                            json.dumps(metadata),
+                            conversation_id,
+                        )
+                        logging.info(f"Updated metadata only for conversation {conversation_id}")
+                        return True
 
+            # Normal save
             await conn.execute(
                 """
                 INSERT INTO conversations (
@@ -232,8 +246,10 @@ class FaebotDatabase:
                 json.dumps(history),
             )
 
+            action = "Created" if not existing else "Updated"
             logging.info(
-                f"✅ Saved conversation {conversation_data['name']} with {len(history)} messages to database"
+                f"✅ {action} conversation {conversation_data['name']} "
+                f"with {len(history)} messages in database"
             )
             return True
             
