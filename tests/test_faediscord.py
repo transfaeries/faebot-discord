@@ -267,7 +267,7 @@ class TestFaebot:
         # Test that different prompts are used based on environment
         assert "{server}" in DEFAULT_PROMPT
         assert "{conversants}" in DM_PROMPT
-        assert "development mode" in DEV_PROMPT
+        assert "development bot" in DEV_PROMPT
 
     @pytest.mark.asyncio
     async def test_conversation_logging(self, faebot, mock_message):

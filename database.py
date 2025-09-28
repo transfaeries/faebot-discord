@@ -40,6 +40,8 @@ def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
                     asyncpg.exceptions.PostgresConnectionError,
                     asyncpg.exceptions.InterfaceError,
                     ConnectionResetError,
+                    ConnectionRefusedError,  # Add this - database completely offline
+                    OSError,  # Add this - catches general connection failures
                 ) as e:
                     last_exception = e
                     if attempt < max_retries - 1:
@@ -51,7 +53,11 @@ def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
                         delay *= backoff_factor
 
                         # Try to recreate the pool if it's a connection issue
-                        if "starting up" in str(e) or "connection" in str(e).lower():
+                        if (
+                            "starting up" in str(e)
+                            or "connection" in str(e).lower()
+                            or "Connect call failed" in str(e)
+                        ):  # Add this check
                             logging.info("Attempting to recreate connection pool...")
                             await self._recreate_pool()
                     else:
