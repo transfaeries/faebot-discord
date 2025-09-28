@@ -93,12 +93,26 @@ class FaebotDatabase:
             logging.error(f"Failed to create database pool: {e}")
             raise
 
+    async def _recreate_pool(self):
+    """Recreate the connection pool (useful when connections go stale)"""
+    try:
+        if self.pool:
+            await self.pool.close()
+            self.pool = None
+            
+        await self.connect()
+        logging.info("✅ Connection pool recreated successfully")
+    except Exception as e:
+        logging.error(f"Failed to recreate connection pool: {e}")
+        self.pool = None
+
     async def close(self):
         """Close the connection pool"""
         if self.pool:
             await self.pool.close()
             logging.info("Database connection pool closed")
 
+    @with_retry()
     async def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Get a single conversation from database"""
         if not self.pool:
@@ -134,7 +148,8 @@ class FaebotDatabase:
                 }
 
             return None
-
+    
+    @with_retry()
     async def save_conversation(
         self,
         conversation_id: str,
@@ -206,33 +221,45 @@ class FaebotDatabase:
                 f"Saved conversation {conversation_data['name']} with {len(history)} messages"
             )
 
+    @with_retry()
     async def save_bot_message(
-        self,
-        conversation_id: str,
-        content: str,
-        context: List[str],
-        message_id: Optional[str] = None,
-    ):
-        """Save a bot message with its context"""
-        if not self.pool:
-            return
+    self,
+    conversation_id: str,
+    content: str,
+    context: List[str],
+    message_id: Optional[str] = None,
+):
+    """Save a bot message with its context"""
+    if not self.pool:
+        logging.warning("No database pool - cannot save bot message")
+        return False
 
+    try:
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO bot_messages (
                     conversation_id, message_id, content, context
                 ) VALUES ($1, $2, $3, $4)
-            """,
+                """,
                 conversation_id,
                 message_id,
                 content,
-                json.dumps(context),  # Last ~5 messages that prompted this response
+                json.dumps(context),
             )
-            logging.debug(
-                f"Saved bot message to DB: {conversation_id} - {content[:50]}..."
+            logging.info(
+                f"✅ Saved bot message to database: {conversation_id} - {content[:50]}..."
             )
+            return True
+            
+    except json.JSONEncodeError as e:
+        logging.error(f"Failed to encode context as JSON: {e}")
+        return False
+    except Exception as e:
+        logging.error(f"Failed to save bot message for {conversation_id}: {e}")
+        raise
 
+    @with_retry()
     async def load_conversations(self) -> Dict[str, Dict[str, Any]]:
         """Load all conversations from the database"""
         if not self.pool:
