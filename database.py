@@ -18,11 +18,16 @@ def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
 
             for attempt in range(max_retries):
                 try:
-                    # Check if pool exists and try to validate connection
-                    if self.pool:
-                        # Test the connection with a simple query
-                        async with self.pool.acquire() as conn:
-                            await conn.fetchval("SELECT 1")
+                    # If no pool exists, try to create one
+                    if not self.pool:
+                        logging.info(
+                            f"No pool available, attempting to create one (attempt {attempt + 1})"
+                        )
+                        await self.connect()
+
+                    # Now validate the connection
+                    async with self.pool.acquire() as conn:
+                        await conn.fetchval("SELECT 1")
 
                     # If validation succeeds, execute the actual function
                     result = await func(self, *args, **kwargs)
@@ -40,8 +45,8 @@ def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
                     asyncpg.exceptions.PostgresConnectionError,
                     asyncpg.exceptions.InterfaceError,
                     ConnectionResetError,
-                    ConnectionRefusedError,  # Add this - database completely offline
-                    OSError,  # Add this - catches general connection failures
+                    ConnectionRefusedError,
+                    OSError,
                 ) as e:
                     last_exception = e
                     if attempt < max_retries - 1:
@@ -52,14 +57,15 @@ def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
                         await asyncio.sleep(delay)
                         delay *= backoff_factor
 
-                        # Try to recreate the pool if it's a connection issue
-                        if (
-                            "starting up" in str(e)
-                            or "connection" in str(e).lower()
-                            or "Connect call failed" in str(e)
-                        ):  # Add this check
-                            logging.info("Attempting to recreate connection pool...")
-                            await self._recreate_pool()
+                        logging.info("Attempting to recreate connection pool...")
+                        try:
+                            if self.pool:
+                                await self.pool.close()
+                            self.pool = None
+                            await self.connect()
+                        except Exception as pool_error:
+                            logging.warning(f"Failed to recreate pool: {pool_error}")
+                            self.pool = None
                     else:
                         logging.error(
                             f"❌ {func.__name__} failed after {max_retries} attempts: {e}"
