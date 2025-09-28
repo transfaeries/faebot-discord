@@ -151,16 +151,17 @@ class FaebotDatabase:
     
     @with_retry()
     async def save_conversation(
-        self,
-        conversation_id: str,
-        conversation_data: Dict[str, Any],
-        merge_history: bool = True,
-    ):
-        """Save or update a conversation's full state"""
-        if not self.pool:
-            logging.warning("No database pool - cannot save bot message")
-            return
+    self,
+    conversation_id: str,
+    conversation_data: Dict[str, Any],
+    merge_history: bool = True,
+):
+    """Save or update a conversation's full state"""
+    if not self.pool:
+        logging.warning("No database pool - cannot save conversation")
+        return False
 
+    try:
         # Split conversation data into metadata and history
         metadata = {
             "id": conversation_data["id"],
@@ -178,16 +179,19 @@ class FaebotDatabase:
         history = conversation_data.get("conversation", [])
 
         async with self.pool.acquire() as conn:
+            existing_len = 0
             if merge_history:
                 # Check existing history length
                 existing = await conn.fetchrow(
                     "SELECT jsonb_array_length(conversation_history) as len FROM conversations WHERE id = $1",
                     conversation_id,
                 )
+                if existing:
+                    existing_len = existing["len"]
 
-            if existing and existing["len"] > len(history):
+            if existing_len > len(history):
                 logging.warning(
-                    f"Not overwriting conversation {conversation_id}: DB has {existing['len']} messages, memory has {len(history)}"
+                    f"Not overwriting conversation {conversation_id}: DB has {existing_len} messages, memory has {len(history)}"
                 )
                 # Just update metadata, keep history
                 await conn.execute(
@@ -195,11 +199,12 @@ class FaebotDatabase:
                     UPDATE conversations
                     SET conversation_metadata = $1, last_updated = CURRENT_TIMESTAMP
                     WHERE id = $2
-                """,
+                    """,
                     json.dumps(metadata),
                     conversation_id,
                 )
-                return
+                logging.info(f"✅ Updated metadata only for conversation {conversation_id}")
+                return True
 
             await conn.execute(
                 """
@@ -210,7 +215,7 @@ class FaebotDatabase:
                     conversation_metadata = EXCLUDED.conversation_metadata,
                     conversation_history = EXCLUDED.conversation_history,
                     last_updated = CURRENT_TIMESTAMP
-            """,
+                """,
                 conversation_id,
                 "discord",
                 json.dumps(metadata),
@@ -218,8 +223,16 @@ class FaebotDatabase:
             )
 
             logging.info(
-                f"Saved conversation {conversation_data['name']} with {len(history)} messages"
+                f"✅ Saved conversation {conversation_data['name']} with {len(history)} messages to database"
             )
+            return True
+            
+    except json.JSONEncodeError as e:
+        logging.error(f"Failed to encode conversation data as JSON: {e}")
+        return False
+    except Exception as e:
+        logging.error(f"Failed to save conversation {conversation_id}: {e}")
+        raise
 
     @with_retry()
     async def save_bot_message(
@@ -261,12 +274,14 @@ class FaebotDatabase:
 
     @with_retry()
     async def load_conversations(self) -> Dict[str, Dict[str, Any]]:
-        """Load all conversations from the database"""
-        if not self.pool:
-            return {}
+    """Load all conversations from the database"""
+    if not self.pool:
+        logging.warning("No database pool - returning empty conversations dict")
+        return {}
 
-        conversations = {}
+    conversations = {}
 
+    try:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -274,34 +289,44 @@ class FaebotDatabase:
                 FROM conversations
                 WHERE platform = 'discord'
                 ORDER BY last_updated DESC
-            """
+                """
             )
 
             for row in rows:
-                conversation_id = row["id"]
-                metadata = json.loads(row["conversation_metadata"])
-                history = json.loads(row["conversation_history"])
+                try:
+                    conversation_id = row["id"]
+                    metadata = json.loads(row["conversation_metadata"])
+                    history = json.loads(row["conversation_history"])
 
-                # Reconstruct the conversation dict as expected by the bot
-                conversations[conversation_id] = {
-                    "id": conversation_id,
-                    "conversation": history,
-                    "conversants": metadata.get("conversants", []),
-                    "history_length": metadata.get("history_length", 69),
-                    "reply_frequency": metadata.get("reply_frequency", 0.05),
-                    "name": metadata.get("name", "Unknown"),
-                    "prompt": metadata.get("prompt", ""),
-                    "model": metadata.get("model", "google/gemini-2.0-flash-001"),
-                    "server_name": metadata.get("server_name", ""),
-                    "channel_name": metadata.get("channel_name", ""),
-                    "channel_topic": metadata.get("channel_topic", ""),
-                }
+                    # Reconstruct the conversation dict as expected by the bot
+                    conversations[conversation_id] = {
+                        "id": conversation_id,
+                        "conversation": history,
+                        "conversants": metadata.get("conversants", []),
+                        "history_length": metadata.get("history_length", 69),
+                        "reply_frequency": metadata.get("reply_frequency", 0.05),
+                        "name": metadata.get("name", "Unknown"),
+                        "prompt": metadata.get("prompt", ""),
+                        "model": metadata.get("model", "google/gemini-2.0-flash-001"),
+                        "server_name": metadata.get("server_name", ""),
+                        "channel_name": metadata.get("channel_name", ""),
+                        "channel_topic": metadata.get("channel_topic", ""),
+                    }
 
-                logging.info(
-                    f"Loaded conversation {metadata.get('name')} with {len(history)} messages"
-                )
+                    logging.info(
+                        f"✅ Loaded conversation {metadata.get('name')} with {len(history)} messages"
+                    )
+                except json.JSONDecodeError as e:
+                    logging.error(f"Failed to parse JSON for conversation {row['id']}: {e}, skipping...")
+                except Exception as e:
+                    logging.error(f"Failed to load conversation {row['id']}: {e}, skipping...")
 
+        logging.info(f"✅ Successfully loaded {len(conversations)} conversations from database")
         return conversations
+        
+    except Exception as e:
+        logging.error(f"Failed to load conversations from database: {e}")
+        return {}
 
     async def update_reactions(self, message_id: str, reactions: Dict[str, int]):
         """Update reactions on a bot message (for future use)"""
