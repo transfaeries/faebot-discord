@@ -303,6 +303,7 @@ async def save_conversation(
     """Load all conversations from the database"""
     if not self.pool:
         logging.warning("No database pool - returning empty conversations dict")
+        # This is the ONLY case where we return empty - no pool at all
         return {}
 
     conversations = {}
@@ -318,13 +319,20 @@ async def save_conversation(
                 """
             )
 
+            if not rows:
+                logging.info("No conversations found in database (this is normal for first run)")
+                return {}  # Empty database is valid
+
+            # Track load statistics
+            successful = 0
+            failed = 0
+
             for row in rows:
                 try:
                     conversation_id = row["id"]
                     metadata = json.loads(row["conversation_metadata"])
                     history = json.loads(row["conversation_history"])
 
-                    # Reconstruct the conversation dict as expected by the bot
                     conversations[conversation_id] = {
                         "id": conversation_id,
                         "conversation": history,
@@ -338,20 +346,34 @@ async def save_conversation(
                         "channel_name": metadata.get("channel_name", ""),
                         "channel_topic": metadata.get("channel_topic", ""),
                     }
-
-                    logging.info(
-                        f"✅ Loaded conversation {metadata.get('name')} with {len(history)} messages"
+                    successful += 1
+                    logging.debug(
+                        f"Loaded conversation {metadata.get('name')} with {len(history)} messages"
                     )
+                    
                 except json.JSONDecodeError as e:
+                    failed += 1
                     logging.error(f"Failed to parse JSON for conversation {row['id']}: {e}, skipping...")
                 except Exception as e:
+                    failed += 1
                     logging.error(f"Failed to load conversation {row['id']}: {e}, skipping...")
 
-        logging.info(f"✅ Successfully loaded {len(conversations)} conversations from database")
+            logging.info(
+                f"✅ Loaded {successful}/{successful + failed} conversations from database"
+                + (f" ({failed} failed)" if failed > 0 else "")
+            )
+            
+            # If we failed to load everything, that's concerning
+            if successful == 0 and failed > 0:
+                logging.error("❌ Failed to load ANY conversations despite having data in database!")
+                # But still return empty rather than crash - bot can create new conversations
+                
         return conversations
         
     except Exception as e:
-        logging.error(f"Failed to load conversations from database: {e}")
+        # This means we couldn't even query the database after retries
+        logging.error(f"❌ Critical failure loading conversations from database: {e}")
+        # Return empty dict - bot will start fresh but won't crash
         return {}
 
     async def update_reactions(self, message_id: str, reactions: Dict[str, int]):
