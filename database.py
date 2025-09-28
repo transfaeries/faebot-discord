@@ -1,8 +1,69 @@
 import asyncpg
+import asyncio
 import os
 import logging
 import json
 from typing import Dict, List, Optional, Any
+from functools import wraps
+
+def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
+    """Decorator for database operations with retry logic for dormant connections"""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(self, *args, **kwargs):
+            last_exception = None
+            delay = initial_delay
+            
+            for attempt in range(max_retries):
+                try:
+                    # Check if pool exists and try to validate connection
+                    if self.pool:
+                        # Test the connection with a simple query
+                        async with self.pool.acquire() as conn:
+                            await conn.fetchval("SELECT 1")
+                    
+                    # If validation succeeds, execute the actual function
+                    result = await func(self, *args, **kwargs)
+                    
+                    # Log success if this was a retry
+                    if attempt > 0:
+                        logging.info(f"✅ {func.__name__} succeeded after {attempt + 1} attempts")
+                    
+                    return result
+                    
+                except (asyncpg.exceptions.CannotConnectNowError, 
+                        asyncpg.exceptions.PostgresConnectionError,
+                        asyncpg.exceptions.InterfaceError,
+                        ConnectionResetError) as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        logging.warning(
+                            f"Database connection error in {func.__name__} (attempt {attempt + 1}/{max_retries}): {e}"
+                            f"\nRetrying in {delay} seconds..."
+                        )
+                        await asyncio.sleep(delay)
+                        delay *= backoff_factor
+                        
+                        # Try to recreate the pool if it's a connection issue
+                        if "starting up" in str(e) or "connection" in str(e).lower():
+                            logging.info("Attempting to recreate connection pool...")
+                            await self._recreate_pool()
+                    else:
+                        logging.error(
+                            f"❌ {func.__name__} failed after {max_retries} attempts: {e}"
+                        )
+                        
+                except Exception as e:
+                    # For non-connection errors, log and raise immediately
+                    logging.error(f"Unexpected error in {func.__name__}: {e}")
+                    raise
+                    
+            # If we've exhausted retries, raise the last exception
+            if last_exception:
+                raise last_exception
+                
+        return wrapper
+    return decorator
 
 
 class FaebotDatabase:
