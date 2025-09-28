@@ -69,6 +69,7 @@ def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
                 raise last_exception
 
         return wrapper
+
     return decorator
 
 

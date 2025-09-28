@@ -116,14 +116,14 @@ class Faebot(discord.Client):
                 last_save = self.last_save_time.get(conversation_id, 0)
                 time_since_save = time.time() - last_save
 
-                if (
-                    conv_length % 10 == 0 or time_since_save > 300
-                ):  # Every 10 msgs or 5 min
+                if conv_length % 10 == 0 or time_since_save > 300:
                     logging.debug(f"Periodic save for {conversation_id}")
-                    await self.fdb.save_conversation(
+                    if await self.fdb.save_conversation(
                         conversation_id, self.conversations[conversation_id]
-                    )
-                    self.last_save_time[conversation_id] = time.time()
+                    ):
+                        self.last_save_time[conversation_id] = time.time()
+                    else:
+                        logging.warning(f"Periodic save failed for {conversation_id}")
 
             author = message.author.name
             if author not in self.conversations[conversation_id]["conversants"]:
@@ -321,22 +321,24 @@ class Faebot(discord.Client):
             sent_message = await message.channel.send(reply)
 
             # Get last 5 messages as context (excluding the bot's new reply)
-            context = self.conversations[conversation_id]["conversation"][
-                -6:-1
-            ]  # Last 5 before bot's reply
-            await self.fdb.save_bot_message(
+            context = self.conversations[conversation_id]["conversation"][-6:-1]
+            if not await self.fdb.save_bot_message(
                 conversation_id=conversation_id,
                 content=reply,
                 context=context,
                 message_id=str(sent_message.id) if sent_message else None,
-            )
+            ):
+                logging.warning(f"Failed to save bot message for {conversation_id}")
 
             # Also save the updated conversation state
-            logging.info(f"Saving bot response to database for {conversation_id}")
-            await self.fdb.save_conversation(
+            if not await self.fdb.save_conversation(
                 conversation_id, self.conversations[conversation_id]
-            )
-
+            ):
+                logging.warning(
+                    f"Failed to save conversation state for {conversation_id}"
+                )
+            else:
+                logging.info(f"Saved bot response to database for {conversation_id}")
             return sent_message
 
         except Exception as e:
@@ -455,7 +457,9 @@ class Faebot(discord.Client):
 
                 # Extract the completion text
                 if "choices" in result and len(result["choices"]) > 0:
-                    reply = result["choices"][0]["text"]  # Note: changed from message.content
+                    reply = result["choices"][0][
+                        "text"
+                    ]  # Note: changed from message.content
                     return str(reply.strip())
                 else:
                     logging.error(
@@ -535,7 +539,8 @@ class Faebot(discord.Client):
         """Close the bot and clean up resources"""
         # Save all conversations before shutting down
         for conv_id, conv_data in self.conversations.items():
-            await self.fdb.save_conversation(conv_id, conv_data)
+            if not await self.fdb.save_conversation(conv_id, conv_data):
+                logging.error(f"Failed to save conversation {conv_id} during shutdown")
 
         if self.session:
             await self.session.close()
