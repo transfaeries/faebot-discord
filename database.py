@@ -114,17 +114,19 @@ class FaebotDatabase:
 
     @with_retry()
     async def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single conversation from database"""
-        if not self.pool:
-            return None
+    """Get a single conversation from database"""
+    if not self.pool:
+        logging.warning("No database pool available - cannot get conversation")
+        return None
 
+    try:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT conversation_metadata, conversation_history
                 FROM conversations
                 WHERE id = $1 AND platform = 'discord'
-            """,
+                """,
                 conversation_id,
             )
 
@@ -146,8 +148,16 @@ class FaebotDatabase:
                     "channel_name": metadata.get("channel_name", ""),
                     "channel_topic": metadata.get("channel_topic", ""),
                 }
-
-            return None
+            else:
+                logging.debug(f"No conversation found in database for ID: {conversation_id}")
+                return None
+                
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse JSON for conversation {conversation_id}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Unexpected error getting conversation {conversation_id}: {e}")
+        raise
     
     @with_retry()
     async def save_conversation(
