@@ -360,7 +360,7 @@ class Faebot(discord.Client):
         model="google/gemini-2.0-flash-001",
         conversation_id=None,
     ) -> str:
-        """Generates AI-powered responses using the OpenRouter API with the specified model - now async"""
+        """Generates AI-powered responses using OpenRouter API or local KoboldCPP"""
 
         if self.debug_prompts:
             logging.info("generating reply with model: " + model)
@@ -374,46 +374,65 @@ class Faebot(discord.Client):
             {"role": "user", "content": prompt},
         ]
 
+        # Check if we should use local model
+        use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
+        koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:5001")
+
         try:
             # Use aiohttp for async HTTP requests
             if not self.session:
                 self.session = aiohttp.ClientSession()
 
-            async with self.session.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
+            if use_local:
+                # Use local KoboldCPP
+                url = f"{koboldcpp_url}/v1/chat/completions"
+                headers = {"Content-Type": "application/json"}
+                payload = {
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 250,
+                    "stop": ["[20"],
+                }
+                logging.info(f"✨ Using local KoboldCPP at {koboldcpp_url}")
+            else:
+                # Use OpenRouter
+                url = "https://openrouter.ai/api/v1/chat/completions"
+                headers = {
                     "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
                     "HTTP-Referer": os.getenv(
                         "SITE_URL", "https://github.com/transfaeries/faebot-discord"
                     ),
                     "X-Title": "Faebot Discord",
                     "Content-Type": "application/json",
-                },
-                json={
+                }
+                payload = {
                     "model": model,
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 250,
                     "stop": ["[20"],
-                },
+                }
+
+            async with self.session.post(
+                url=url,
+                headers=headers,
+                json=payload,
             ) as response:
                 result = await response.json()
 
                 if self.debug_prompts:
-                    logging.info(f"OpenRouter API response: {result}")
+                    logging.info(f"API response: {result}")
 
                 # Extract the assistant's message content
                 if "choices" in result and len(result["choices"]) > 0:
                     reply = result["choices"][0]["message"]["content"]
                     return str(reply)
                 else:
-                    logging.error(
-                        f"Unexpected response format from OpenRouter: {result}"
-                    )
+                    logging.error(f"Unexpected response format: {result}")
                     return "I couldn't generate a response. Please try again."
 
         except Exception as e:
-            logging.error(f"Error in OpenRouter API call: {e}")
+            logging.error(f"Error in API call: {e}")
             return "Sorry, I encountered an error while trying to respond."
 
     async def _should_respond_to_message(self, message, conversation_id):
