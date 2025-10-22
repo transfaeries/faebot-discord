@@ -413,7 +413,7 @@ class Faebot(discord.Client):
         model="google/gemini-2.0-flash-001",
         conversation_id=None,
     ) -> str:
-        """Generates AI-powered responses using the OpenRouter API with text completion"""
+        """Generates AI-powered responses using OpenRouter API or local KoboldCPP with text completion"""
 
         if not conversation_id or conversation_id not in self.conversations:
             return "Error: Invalid conversation context"
@@ -426,49 +426,76 @@ class Faebot(discord.Client):
             logging.info("generating reply with model: " + model)
             logging.info(f"\n=== PROMPT START ===\n{full_prompt}\n=== PROMPT END ===\n")
 
+        # Check if we should use local model
+        use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
+        koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:5001")
+
         try:
             # Use aiohttp for async HTTP requests
             if not self.session:
                 self.session = aiohttp.ClientSession()
 
-            async with self.session.post(
-                url="https://openrouter.ai/api/v1/completions",  # Note: changed endpoint
-                headers={
+            if use_local:
+                # Use local KoboldCPP - native generation endpoint
+                url = f"{koboldcpp_url}/api/v1/generate"
+                headers = {"Content-Type": "application/json"}
+                payload = {
+                    "prompt": full_prompt,
+                    "max_context_length": 4096,
+                    "max_length": 250,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "rep_pen": 1.1,  # KoboldCPP uses rep_pen instead of frequency_penalty
+                    "stop_sequence": ["[20", "\n\n\n"],
+                }
+                logging.info(f"✨ Using local KoboldCPP at {koboldcpp_url}")
+            else:
+                # Use OpenRouter
+                url = "https://openrouter.ai/api/v1/completions"
+                headers = {
                     "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
                     "HTTP-Referer": os.getenv(
                         "SITE_URL", "https://github.com/transfaeries/faebot-discord"
                     ),
                     "X-Title": "Faebot Discord",
                     "Content-Type": "application/json",
-                },
-                json={
+                }
+                payload = {
                     "model": model,
                     "prompt": full_prompt,
                     "temperature": 0.7,
                     "max_tokens": 250,
                     "stop": ["[20"],
-                    "frequency_penalty": 1.5,  # Note: changed from repetition_penalty
-                },
+                    "frequency_penalty": 1.5,
+                }
+
+            async with self.session.post(
+                url=url,
+                headers=headers,
+                json=payload,
             ) as response:
                 result = await response.json()
 
                 if self.debug_prompts:
-                    logging.info(f"OpenRouter API response: {result}")
+                    logging.info(f"API response: {result}")
 
                 # Extract the completion text
-                if "choices" in result and len(result["choices"]) > 0:
-                    reply = result["choices"][0][
-                        "text"
-                    ]  # Note: changed from message.content
-                    return str(reply.strip())
+                if use_local:
+                    # KoboldCPP returns results in a different format
+                    if "results" in result and len(result["results"]) > 0:
+                        reply = result["results"][0]["text"]
+                        return str(reply.strip())
                 else:
-                    logging.error(
-                        f"Unexpected response format from OpenRouter: {result}"
-                    )
-                    return "I couldn't generate a response. Please try again."
+                    # OpenRouter format
+                    if "choices" in result and len(result["choices"]) > 0:
+                        reply = result["choices"][0]["text"]
+                        return str(reply.strip())
+
+                logging.error(f"Unexpected response format: {result}")
+                return "I couldn't generate a response. Please try again."
 
         except Exception as e:
-            logging.error(f"Error in OpenRouter API call: {e}")
+            logging.error(f"Error in API call: {e}")
             return "Sorry, I encountered an error while trying to respond."
 
     async def _should_respond_to_message(self, message, conversation_id):
