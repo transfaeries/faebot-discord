@@ -22,6 +22,14 @@ class TestFaebot:
             bot = Faebot(mock_discord_intents)
             # Mock _connection attribute which is required by discord.py
             bot._connection = Mock()
+            # Mock the database to avoid actual database calls
+            bot.fdb = Mock()
+            bot.fdb.save_conversation = AsyncMock(return_value=True)
+            bot.fdb.save_bot_message = AsyncMock(return_value=True)
+            bot.fdb.get_conversation = AsyncMock(return_value=None)
+            bot.fdb.connect = AsyncMock(return_value=True)
+            bot.fdb.close = AsyncMock(return_value=True)
+            bot.fdb.load_conversations = AsyncMock(return_value={})
             # Use patch to override the user property
             user_mock = Mock()
             user_mock.id = 12345
@@ -61,10 +69,10 @@ class TestFaebot:
     @pytest.mark.asyncio
     async def test_on_ready(self, faebot):
         """Test on_ready method"""
-        with patch("aiohttp.ClientSession", return_value=AsyncMock()) as mock_session:
+        mock_session = AsyncMock()
+        with patch("aiohttp.ClientSession", return_value=mock_session):
             await faebot.on_ready()
-            assert faebot.session is not None
-            mock_session.assert_called_once()
+            assert faebot.session == mock_session
 
     @pytest.mark.asyncio
     async def test_close(self, faebot):
@@ -267,7 +275,7 @@ class TestFaebot:
         # Test that different prompts are used based on environment
         assert "{server}" in DEFAULT_PROMPT
         assert "{conversants}" in DM_PROMPT
-        assert "development mode" in DEV_PROMPT
+        assert "development bot" in DEV_PROMPT
 
     @pytest.mark.asyncio
     async def test_conversation_logging(self, faebot, mock_message):

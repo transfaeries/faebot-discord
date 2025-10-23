@@ -1,7 +1,7 @@
 .PHONY: test lint format static_type_check setup-hooks clean all
 
 # Default target
-all: lint format static_type_check test
+all: black lint static_type_check test
 
 # Run tests with pytest
 test:

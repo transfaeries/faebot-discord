@@ -4,26 +4,25 @@
 import os
 import logging
 import random
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import asyncio
 import discord
-from typing import Optional
-import aiohttp  # Add this import
-
-# Import admin commands
+import aiohttp
+from database import FaebotDatabase
 from admin_commands import admin_commands
-
-# set up logging
-logging.basicConfig(
-    format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+import time
 
 
 model = os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")  # Updated default model
 admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
+
+# set up logging
+logging.basicConfig(
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    level=logging.DEBUG if env == "dev" else logging.INFO,
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 # Define placeholder constants
 PLACEHOLDER_SERVER = "{server}"
@@ -41,7 +40,7 @@ DM_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate I'm chatting privately
 
 # Development environment prompt
 DEV_PROMPT = (
-    f"I'm Faebot, the transfaeries' AI systemmate currently running in development mode."
+    f"I'm Brownie-dev, i'm a development bot that assists in testing Faebot. "
     f"I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}."
     f" I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
 )
@@ -53,7 +52,7 @@ if env == "dev":
 else:
     INITIAL_PROMPT = DEFAULT_PROMPT
 
-COMMAND_PREFIX = "fae;"
+COMMAND_PREFIX = "faedev;" if (env == "dev") else "fae;"
 
 
 # declare a new class that inherits the discord client class
@@ -66,10 +65,14 @@ class Faebot(discord.Client):
         self.retries: Dict[str, int] = {}
         self.model: str = model
         self.debug_prompts = env == "dev"  # Store debug state in the bot instance
+        self.fdb = FaebotDatabase()
 
         # Add queue for handling concurrent requests
         self.pending_responses: Dict[str, asyncio.Task] = {}
         self.session: Optional[aiohttp.ClientSession] = None
+
+        # Track last save per conversation
+        self.last_save_time: dict[str, float] = {}
 
         super().__init__(intents=intents)
 
@@ -77,14 +80,15 @@ class Faebot(discord.Client):
         """runs when bot is ready"""
         # Create a shared aiohttp session for async requests
         self.session = aiohttp.ClientSession()
+
+        # Initialize database connection
+        await self.fdb.connect()
+
+        # Load existing conversations from database
+        self.conversations = await self.fdb.load_conversations()
+
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
-
-    async def close(self):
-        """Close the bot and clean up resources"""
-        if self.session:
-            await self.session.close()
-        await super().close()
 
     async def on_message(self, message):
         """Handles what happens when the bot receives a message"""
@@ -106,6 +110,21 @@ class Faebot(discord.Client):
 
         # Log message if channel is known, regardless of reply status
         if conversation_id in self.conversations:
+            # Check if we should do a periodic save (every 10 messages or 5 minutes)
+            if conversation_id in self.conversations:
+                conv_length = len(self.conversations[conversation_id]["conversation"])
+                last_save = self.last_save_time.get(conversation_id, 0)
+                time_since_save = time.time() - last_save
+
+                if conv_length % 10 == 0 or time_since_save > 300:
+                    logging.debug(f"Periodic save for {conversation_id}")
+                    if await self.fdb.save_conversation(
+                        conversation_id, self.conversations[conversation_id]
+                    ):
+                        self.last_save_time[conversation_id] = time.time()
+                    else:
+                        logging.warning(f"Periodic save failed for {conversation_id}")
+
             author = message.author.name
             if author not in self.conversations[conversation_id]["conversants"]:
                 self.conversations[conversation_id]["conversants"].append(author)
@@ -171,8 +190,21 @@ class Faebot(discord.Client):
         self, message, message_tokens=None, conversation_id=None
     ):
         """Initialize a new conversation"""
-        # Use the conversation_id from the parameter
-        # initialize conversation
+        # Check if conversation already exists (in memory or database)
+        if conversation_id in self.conversations:
+            logging.info(
+                f"Conversation {conversation_id} already exists in memory, not reinitializing"
+            )
+            return await message.channel.send("*faebot is already here!*")
+
+        # Check database too
+        existing = await self.fdb.get_conversation(conversation_id)
+        if existing:
+            logging.info(
+                f"Loading existing conversation {conversation_id} from database"
+            )
+            self.conversations[conversation_id] = existing
+            return await message.channel.send("*faebot remembers this place*")
 
         # Prepare base prompt with context information
         if message.channel.type[0] == "text":
@@ -286,7 +318,28 @@ class Faebot(discord.Client):
             )
 
             # Send the reply
-            return await message.channel.send(reply)
+            sent_message = await message.channel.send(reply)
+
+            # Get last 5 messages as context (excluding the bot's new reply)
+            context = self.conversations[conversation_id]["conversation"][-6:-1]
+            if not await self.fdb.save_bot_message(
+                conversation_id=conversation_id,
+                content=reply,
+                context=context,
+                message_id=str(sent_message.id) if sent_message else None,
+            ):
+                logging.warning(f"Failed to save bot message for {conversation_id}")
+
+            # Also save the updated conversation state
+            if not await self.fdb.save_conversation(
+                conversation_id, self.conversations[conversation_id]
+            ):
+                logging.warning(
+                    f"Failed to save conversation state for {conversation_id}"
+                )
+            else:
+                logging.info(f"Saved bot response to database for {conversation_id}")
+            return sent_message
 
         except Exception as e:
             typing_task.cancel()
@@ -360,60 +413,89 @@ class Faebot(discord.Client):
         model="google/gemini-2.0-flash-001",
         conversation_id=None,
     ) -> str:
-        """Generates AI-powered responses using the OpenRouter API with the specified model - now async"""
+        """Generates AI-powered responses using OpenRouter API or local KoboldCPP with text completion"""
+
+        if not conversation_id or conversation_id not in self.conversations:
+            return "Error: Invalid conversation context"
+
+        # Combine system prompt and conversation into a single text block
+        system_prompt = self.conversations[conversation_id]["prompt"]
+        full_prompt = f"{system_prompt}\n\n{prompt}"
 
         if self.debug_prompts:
             logging.info("generating reply with model: " + model)
-            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
+            logging.info(f"\n=== PROMPT START ===\n{full_prompt}\n=== PROMPT END ===\n")
 
-        system_prompt = self.conversations[conversation_id]["prompt"]
-
-        # Create a proper message structure
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ]
+        # Check if we should use local model
+        use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
+        koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:5001")
 
         try:
             # Use aiohttp for async HTTP requests
             if not self.session:
                 self.session = aiohttp.ClientSession()
 
-            async with self.session.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
+            if use_local:
+                # Use local KoboldCPP - native generation endpoint
+                url = f"{koboldcpp_url}/api/v1/generate"
+                headers = {"Content-Type": "application/json"}
+                payload = {
+                    "prompt": full_prompt,
+                    "max_context_length": 4096,
+                    "max_length": 250,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "rep_pen": 1.1,  # KoboldCPP uses rep_pen instead of frequency_penalty
+                    "stop_sequence": ["[20", "\n\n\n"],
+                }
+                logging.info(f"✨ Using local KoboldCPP at {koboldcpp_url}")
+            else:
+                # Use OpenRouter
+                url = "https://openrouter.ai/api/v1/completions"
+                headers = {
                     "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
                     "HTTP-Referer": os.getenv(
                         "SITE_URL", "https://github.com/transfaeries/faebot-discord"
                     ),
                     "X-Title": "Faebot Discord",
                     "Content-Type": "application/json",
-                },
-                json={
+                }
+                payload = {
                     "model": model,
-                    "messages": messages,
+                    "prompt": full_prompt,
                     "temperature": 0.7,
                     "max_tokens": 250,
                     "stop": ["[20"],
-                },
+                    "frequency_penalty": 1.5,
+                }
+
+            async with self.session.post(
+                url=url,
+                headers=headers,
+                json=payload,
             ) as response:
                 result = await response.json()
 
                 if self.debug_prompts:
-                    logging.info(f"OpenRouter API response: {result}")
+                    logging.info(f"API response: {result}")
 
-                # Extract the assistant's message content
-                if "choices" in result and len(result["choices"]) > 0:
-                    reply = result["choices"][0]["message"]["content"]
-                    return str(reply)
+                # Extract the completion text
+                if use_local:
+                    # KoboldCPP returns results in a different format
+                    if "results" in result and len(result["results"]) > 0:
+                        reply = result["results"][0]["text"]
+                        return str(reply.strip())
                 else:
-                    logging.error(
-                        f"Unexpected response format from OpenRouter: {result}"
-                    )
-                    return "I couldn't generate a response. Please try again."
+                    # OpenRouter format
+                    if "choices" in result and len(result["choices"]) > 0:
+                        reply = result["choices"][0]["text"]
+                        return str(reply.strip())
+
+                logging.error(f"Unexpected response format: {result}")
+                return "I couldn't generate a response. Please try again."
 
         except Exception as e:
-            logging.error(f"Error in OpenRouter API call: {e}")
+            logging.error(f"Error in API call: {e}")
             return "Sorry, I encountered an error while trying to respond."
 
     async def _should_respond_to_message(self, message, conversation_id):
@@ -479,6 +561,19 @@ class Faebot(discord.Client):
             logging.debug(
                 f"Trimmed conversation {conversation_id} from {current_length} to {history_length} messages"
             )
+
+    async def close(self):
+        """Close the bot and clean up resources"""
+        # Save all conversations before shutting down
+        for conv_id, conv_data in self.conversations.items():
+            if not await self.fdb.save_conversation(conv_id, conv_data):
+                logging.error(f"Failed to save conversation {conv_id} during shutdown")
+
+        if self.session:
+            await self.session.close()
+
+        await self.fdb.close()
+        await super().close()
 
 
 # intents for the discordbot
