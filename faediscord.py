@@ -428,7 +428,7 @@ class Faebot(discord.Client):
 
         # Check if we should use local model
         use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
-        koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:5001")
+        koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:6666")
 
         try:
             # Use aiohttp for async HTTP requests
@@ -438,7 +438,8 @@ class Faebot(discord.Client):
             if use_local:
                 # Use local KoboldCPP - native generation endpoint
                 url = f"{koboldcpp_url}/api/v1/generate"
-                headers = {"Content-Type": "application/json"}
+                headers = {"Authorization": f"Bearer {os.getenv('KOBOLDCPP_KEY', '')}",
+                "Content-Type": "application/json"}
                 payload = {
                     "prompt": full_prompt,
                     "max_context_length": 4096,
