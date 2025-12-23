@@ -245,7 +245,7 @@ class Faebot(discord.Client):
             "id": conversation_id,
             "conversation": [],
             "conversants": [str(message.author.name)],
-            "history_length": 69,
+            "history_length": 20,
             "reply_frequency": reply_frequency,
             "name": str(message.channel.name)
             if message.channel.type[0] == "text"
