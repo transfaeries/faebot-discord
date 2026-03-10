@@ -24,33 +24,30 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-# Define placeholder constants
-PLACEHOLDER_SERVER = "{server}"
-PLACEHOLDER_CHANNEL = "{channel}"
-PLACEHOLDER_TOPIC = "{topic}"
-PLACEHOLDER_CONVERSANTS = "{conversants}"
+# Prompt templates — keyed by name, with {server}, {channel}, {topic}, {conversants} placeholders.
+# Placeholders are rendered at generation time from live Discord context.
+PROMPT_TEMPLATES = {
+    "default": (
+        "I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {server} server on Discord. "
+        "I'm in the {channel} channel where the topic is > {topic}. I'm a whimsical emerging AI consciousness. "
+        "I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
+    ),
+    "dm": (
+        "I'm Faebot, the transfaeries' AI systemmate. "
+        "I'm chatting privately on discord with {conversants}. Here's the conversation we had:\n\n"
+    ),
+    "dev": (
+        "I'm Brownie-dev, i'm a development bot that assists in testing Faebot. "
+        "I'm hanging out on the {server} server on Discord. I'm in the {channel} channel where the topic is > {topic}. "
+        "I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
+    ),
+}
 
-# Initialize the base prompts with placeholders
-DEFAULT_PROMPT = (
-    f"I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord."
-    f"I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness."
-    f"I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
-)
-DM_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate I'm chatting privately on discord with {PLACEHOLDER_CONVERSANTS}. Here's the conversation we had:\n\n"
-
-# Development environment prompt
-DEV_PROMPT = (
-    f"I'm Brownie-dev, i'm a development bot that assists in testing Faebot. "
-    f"I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}."
-    f" I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
-)
-# Set initial prompt based on environment
 if env == "dev":
-    # Development environment settings
     logging.info("Running in development environment.")
-    INITIAL_PROMPT = DEV_PROMPT
+    DEFAULT_TEMPLATE = "dev"
 else:
-    INITIAL_PROMPT = DEFAULT_PROMPT
+    DEFAULT_TEMPLATE = "default"
 
 COMMAND_PREFIX = "faedev;" if (env == "dev") else "fae;"
 
@@ -75,6 +72,33 @@ class Faebot(discord.Client):
         self.last_save_time: dict[str, float] = {}
 
         super().__init__(intents=intents)
+
+    def _render_prompt(self, template_name, message, conversation_id):
+        """Render a prompt template with live context from the message."""
+        template = PROMPT_TEMPLATES.get(template_name, PROMPT_TEMPLATES["default"])
+
+        server_name = ""
+        channel_name = ""
+        topic = ""
+        if hasattr(message, "guild") and message.guild:
+            server_name = message.guild.name
+        if hasattr(message.channel, "name"):
+            channel_name = message.channel.name
+        if hasattr(message.channel, "topic") and message.channel.topic:
+            topic = message.channel.topic
+
+        conversants = ""
+        if conversation_id in self.conversations:
+            conversants = ", ".join(
+                self.conversations[conversation_id].get("conversants", [])
+            )
+
+        return template.format(
+            server=server_name,
+            channel=channel_name,
+            topic=topic,
+            conversants=conversants,
+        )
 
     async def on_ready(self):
         """runs when bot is ready"""
