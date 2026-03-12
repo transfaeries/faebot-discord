@@ -161,11 +161,10 @@ class FaebotDatabase:
                         "history_length": metadata.get("history_length", 69),
                         "reply_frequency": metadata.get("reply_frequency", 0.05),
                         "name": metadata.get("name", "Unknown"),
-                        "prompt": metadata.get("prompt", ""),
+                        "prompt_template": metadata.get(
+                            "prompt_template", "default"
+                        ),
                         "model": metadata.get("model", "google/gemini-2.0-flash-001"),
-                        "server_name": metadata.get("server_name", ""),
-                        "channel_name": metadata.get("channel_name", ""),
-                        "channel_topic": metadata.get("channel_topic", ""),
                     }
                 else:
                     logging.debug(
@@ -202,11 +201,10 @@ class FaebotDatabase:
                 "name": conversation_data["name"],
                 "history_length": conversation_data["history_length"],
                 "reply_frequency": conversation_data["reply_frequency"],
-                "prompt": conversation_data["prompt"],
+                "prompt_template": conversation_data.get(
+                    "prompt_template", "default"
+                ),
                 "model": conversation_data["model"],
-                "server_name": conversation_data.get("server_name", ""),
-                "channel_name": conversation_data.get("channel_name", ""),
-                "channel_topic": conversation_data.get("channel_topic", ""),
                 "conversants": conversation_data.get("conversants", []),
             }
 
@@ -373,13 +371,12 @@ class FaebotDatabase:
                             "history_length": metadata.get("history_length", 69),
                             "reply_frequency": metadata.get("reply_frequency", 0.05),
                             "name": metadata.get("name", "Unknown"),
-                            "prompt": metadata.get("prompt", ""),
+                            "prompt_template": metadata.get(
+                                "prompt_template", "default"
+                            ),
                             "model": metadata.get(
                                 "model", "google/gemini-2.0-flash-001"
                             ),
-                            "server_name": metadata.get("server_name", ""),
-                            "channel_name": metadata.get("channel_name", ""),
-                            "channel_topic": metadata.get("channel_topic", ""),
                         }
                         successful += 1
                         logging.debug(

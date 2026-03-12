@@ -230,35 +230,15 @@ class Faebot(discord.Client):
             self.conversations[conversation_id] = existing
             return await message.channel.send("*faebot remembers this place*")
 
-        # Prepare base prompt with context information
+        # Determine template and frequency based on channel type
         if message.channel.type[0] == "text":
-            # For server channels
-            server_name = message.guild.name if message.guild else "Unknown Server"
-            channel_name = message.channel.name
-
-            # Get channel topic if available
-            topic_text = ""
-            if hasattr(message.channel, "topic") and message.channel.topic:
-                topic_text = f"{message.channel.topic}"
-
-            # Replace placeholders in the prompt
-            context_prompt = INITIAL_PROMPT.replace(PLACEHOLDER_SERVER, server_name)
-            context_prompt = context_prompt.replace(PLACEHOLDER_CHANNEL, channel_name)
-            context_prompt = context_prompt.replace(PLACEHOLDER_TOPIC, topic_text)
-            context_prompt = context_prompt.replace(
-                PLACEHOLDER_CONVERSANTS, str(message.author.name)
-            )
-
+            template = DEFAULT_TEMPLATE
             reply_frequency = 0.05
-
+            name = str(message.channel.name)
         elif message.channel.type[0] == "private":
-            # For direct messages
-            author_name = str(message.author.name)
-
-            # Use DM prompt template and replace author placeholder
-            context_prompt = DM_PROMPT.replace(PLACEHOLDER_CONVERSANTS, author_name)
-
+            template = "dm"
             reply_frequency = 1
+            name = str(message.author.name)
         else:
             return await message.channel.send(
                 "Unknown channel type. Unable to proceed. Please contact administrator"
@@ -271,21 +251,9 @@ class Faebot(discord.Client):
             "conversants": [str(message.author.name)],
             "history_length": 20,
             "reply_frequency": reply_frequency,
-            "name": str(message.channel.name)
-            if message.channel.type[0] == "text"
-            else str(message.author.name),
-            "prompt": context_prompt,  # Use the contextual prompt
-            "model": self.model,  # Add conversation-specific model
-            # Store original metadata for placeholder replacement
-            "server_name": message.guild.name
-            if hasattr(message, "guild") and message.guild
-            else "",
-            "channel_name": message.channel.name
-            if message.channel.type[0] == "text"
-            else "",
-            "channel_topic": message.channel.topic
-            if hasattr(message.channel, "topic")
-            else "",
+            "name": name,
+            "prompt_template": template,
+            "model": self.model,
         }
 
         logging.info(
@@ -303,10 +271,14 @@ class Faebot(discord.Client):
         if not should_respond:
             return
 
-        # populate prompt with conversation history and timestamp
+        # render prompt from template with live context, then append history
+        template_name = self.conversations[conversation_id].get(
+            "prompt_template", DEFAULT_TEMPLATE
+        )
+        rendered_prompt = self._render_prompt(template_name, message, conversation_id)
         current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
         prompt = (
-            self.conversations[conversation_id]["prompt"]
+            rendered_prompt
             + "\n".join(self.conversations[conversation_id]["conversation"])
             + f"\n[{current_time}] faebot:"
         )
@@ -442,13 +414,9 @@ class Faebot(discord.Client):
         if not conversation_id or conversation_id not in self.conversations:
             return "Error: Invalid conversation context"
 
-        # Combine system prompt and conversation into a single text block
-        system_prompt = self.conversations[conversation_id]["prompt"]
-        full_prompt = f"{system_prompt}\n\n{prompt}"
-
         if self.debug_prompts:
             logging.info("generating reply with model: " + model)
-            logging.info(f"\n=== PROMPT START ===\n{full_prompt}\n=== PROMPT END ===\n")
+            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
 
         # Check if we should use local model
         use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
@@ -465,7 +433,7 @@ class Faebot(discord.Client):
                 headers = {"Authorization": f"Bearer {os.getenv('KOBOLDCPP_KEY', '')}",
                 "Content-Type": "application/json"}
                 payload = {
-                    "prompt": full_prompt,
+                    "prompt": prompt,
                     "max_context_length": 4096,
                     "max_length": 250,
                     "temperature": 0.7,
@@ -487,7 +455,7 @@ class Faebot(discord.Client):
                 }
                 payload = {
                     "model": model,
-                    "prompt": full_prompt,
+                    "prompt": prompt,
                     "temperature": 0.7,
                     "max_tokens": 250,
                     "stop": ["[20"],
