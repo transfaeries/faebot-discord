@@ -23,8 +23,11 @@
 
 ## Phase 4: Prompt & Identity Rework (Current)
 - [ ] Rework faebot's Discord prompt (port learnings from Twitch prompt work)
+- [x] Use bot's display name in prompt instead of hardcoded "faebot"
 - [ ] Self-knowledge block — faebot can describe faerself, history, personality
 - [ ] Character document (parallel to faebot-history.md on Twitch)
+- [ ] Resolve @mentions in conversation history (replace `<@id>` with display names)
+- [ ] Resolve custom emoji in conversation history (replace `<:name:id>` with readable form)
 
 ## Phase 5: Code Quality & Cleanup
 - [ ] Move aiohttp to production dependencies

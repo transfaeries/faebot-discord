@@ -219,7 +219,7 @@ class Faebot(discord.Client):
             logging.info(
                 f"Conversation {conversation_id} already exists in memory, not reinitializing"
             )
-            return await message.channel.send("*faebot is already here!*")
+            return await message.channel.send(f"*{self.user.display_name} is already here!*")
 
         # Check database too
         existing = await self.fdb.get_conversation(conversation_id)
@@ -228,7 +228,7 @@ class Faebot(discord.Client):
                 f"Loading existing conversation {conversation_id} from database"
             )
             self.conversations[conversation_id] = existing
-            return await message.channel.send("*faebot remembers this place*")
+            return await message.channel.send(f"*{self.user.display_name} remembers this place*")
 
         # Determine template and frequency based on channel type
         if message.channel.type[0] == "text":
@@ -260,7 +260,7 @@ class Faebot(discord.Client):
             f"Initialized new conversation {self.conversations[conversation_id]['name']} with ID {conversation_id}."
         )
         return await message.channel.send(
-            "*faebot slid into the conversation like a fae in the night*"
+            f"*{self.user.display_name} slid into the conversation like a fae in the night*"
         )
 
     async def _handle_conversation(self, message, conversation_id):
@@ -280,7 +280,7 @@ class Faebot(discord.Client):
         prompt = (
             rendered_prompt
             + "\n".join(self.conversations[conversation_id]["conversation"])
-            + f"\n[{current_time}] faebot:"
+            + f"\n[{current_time}] {self.user.display_name}:"
         )
 
         # Create a typing indicator that will continue until response is ready
@@ -304,7 +304,7 @@ class Faebot(discord.Client):
 
             # Log the bot's reply with timestamp
             self.conversations[conversation_id]["conversation"].append(
-                f"[{current_time}] faebot: {reply}"
+                f"[{current_time}] {self.user.display_name}: {reply}"
             )
 
             logging.info(
