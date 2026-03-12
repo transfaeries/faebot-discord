@@ -6,6 +6,9 @@ import json
 from typing import Dict, List, Optional, Any
 from functools import wraps
 
+env = os.getenv("ENVIRONMENT", "dev").lower()
+DEFAULT_TEMPLATE = "dev" if env == "dev" else "default"
+
 
 def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
     """Decorator for database operations with retry logic for dormant connections"""
@@ -162,7 +165,7 @@ class FaebotDatabase:
                         "reply_frequency": metadata.get("reply_frequency", 0.05),
                         "name": metadata.get("name", "Unknown"),
                         "prompt_template": metadata.get(
-                            "prompt_template", "default"
+                            "prompt_template", DEFAULT_TEMPLATE
                         ),
                         "model": metadata.get("model", "google/gemini-2.0-flash-001"),
                     }
@@ -202,7 +205,7 @@ class FaebotDatabase:
                 "history_length": conversation_data["history_length"],
                 "reply_frequency": conversation_data["reply_frequency"],
                 "prompt_template": conversation_data.get(
-                    "prompt_template", "default"
+                    "prompt_template", DEFAULT_TEMPLATE
                 ),
                 "model": conversation_data["model"],
                 "conversants": conversation_data.get("conversants", []),
@@ -372,7 +375,7 @@ class FaebotDatabase:
                             "reply_frequency": metadata.get("reply_frequency", 0.05),
                             "name": metadata.get("name", "Unknown"),
                             "prompt_template": metadata.get(
-                                "prompt_template", "default"
+                                "prompt_template", DEFAULT_TEMPLATE
                             ),
                             "model": metadata.get(
                                 "model", "google/gemini-2.0-flash-001"
