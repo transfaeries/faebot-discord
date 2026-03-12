@@ -1,7 +1,7 @@
 import pytest
 import os
 from unittest.mock import AsyncMock, Mock, patch
-from faediscord import Faebot, COMMAND_PREFIX, DEFAULT_PROMPT, DM_PROMPT, DEV_PROMPT
+from faediscord import Faebot, COMMAND_PREFIX, PROMPT_TEMPLATES, DEFAULT_TEMPLATE
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -119,9 +119,7 @@ class TestFaebot:
         assert conv["id"] == conversation_id
         assert conv["conversants"] == [mock_message.author.name]
         assert conv["reply_frequency"] == 0.05
-        assert "Test Server" in conv["prompt"]
-        assert "test-channel" in conv["prompt"]
-        assert "Test topic" in conv["prompt"]
+        assert conv["prompt_template"] == DEFAULT_TEMPLATE
         mock_message.channel.send.assert_called_once()
 
     @pytest.mark.asyncio
@@ -145,7 +143,7 @@ class TestFaebot:
         assert conversation_id in faebot.conversations
         conv = faebot.conversations[conversation_id]
         assert conv["reply_frequency"] == 1
-        assert dm_message.author.name in conv["prompt"]
+        assert conv["prompt_template"] == "dm"
         dm_message.channel.send.assert_called_once()
 
     @pytest.mark.asyncio
@@ -193,7 +191,7 @@ class TestFaebot:
     async def test_generate_ai_response_error(self, faebot):
         """Test AI response generation error handling"""
         conversation_id = "test_conv"
-        faebot.conversations[conversation_id] = {"prompt": "test prompt"}
+        faebot.conversations[conversation_id] = {"prompt_template": "default"}
         faebot.session = AsyncMock()
         faebot.session.post.side_effect = Exception("API Error")
 
@@ -207,7 +205,7 @@ class TestFaebot:
         """Test successful reply generation"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "prompt": "test prompt",
+            "prompt_template": "default",
             "model": "test-model",
             "conversation": [],
         }
@@ -224,7 +222,7 @@ class TestFaebot:
         """Test reply generation error and retry logic"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "prompt": "test prompt",
+            "prompt_template": "default",
             "model": "test-model",
             "conversation": ["msg1", "msg2", "msg3", "msg4"],
         }
@@ -270,12 +268,11 @@ class TestFaebot:
             assert any("original message" in msg for msg in conversation)
             assert any("replied:" in msg for msg in conversation)
 
-    def test_environment_prompts(self):
-        """Test different prompts based on environment"""
-        # Test that different prompts are used based on environment
-        assert "{server}" in DEFAULT_PROMPT
-        assert "{conversants}" in DM_PROMPT
-        assert "development bot" in DEV_PROMPT
+    def test_prompt_templates(self):
+        """Test that prompt templates contain expected placeholders"""
+        assert "{server}" in PROMPT_TEMPLATES["default"]
+        assert "{conversants}" in PROMPT_TEMPLATES["dm"]
+        assert "development bot" in PROMPT_TEMPLATES["dev"]
 
     @pytest.mark.asyncio
     async def test_conversation_logging(self, faebot, mock_message):
@@ -341,7 +338,7 @@ class TestFaebot:
             "conversation": [],
             "history_length": 69,
             "reply_frequency": 1.0,  # Always respond
-            "prompt": "test prompt",
+            "prompt_template": "default",
             "model": "test-model",
         }
 
@@ -356,21 +353,30 @@ class TestFaebot:
                     assert conversation_id not in faebot.pending_responses
                     mock_message.channel.send.assert_called_once_with("test response")
 
-    @pytest.mark.asyncio
-    async def test_prompt_placeholder_replacement(self, faebot, mock_message):
-        """Test that prompt placeholders are properly replaced"""
+    def test_render_prompt_replaces_placeholders(self, faebot, mock_message):
+        """Test that _render_prompt replaces placeholders with live context"""
         conversation_id = str(mock_message.channel.id)
         mock_message.channel.topic = "Cool test topic"
+        faebot.conversations[conversation_id] = {
+            "conversants": ["test_user"],
+        }
 
-        await faebot._initialize_conversation(
-            mock_message, conversation_id=conversation_id
-        )
+        rendered = faebot._render_prompt("default", mock_message, conversation_id)
 
-        prompt = faebot.conversations[conversation_id]["prompt"]
-        # Check that placeholders were replaced
-        assert "{server}" not in prompt
-        assert "{channel}" not in prompt
-        assert "{topic}" not in prompt
-        assert "Test Server" in prompt
-        assert "test-channel" in prompt
-        assert "Cool test topic" in prompt
+        assert "{server}" not in rendered
+        assert "{channel}" not in rendered
+        assert "{topic}" not in rendered
+        assert "Test Server" in rendered
+        assert "test-channel" in rendered
+        assert "Cool test topic" in rendered
+
+    def test_render_prompt_dm_template(self, faebot, mock_message):
+        """Test that DM template renders conversants"""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": ["alice", "bob"],
+        }
+
+        rendered = faebot._render_prompt("dm", mock_message, conversation_id)
+
+        assert "alice, bob" in rendered
