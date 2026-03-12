@@ -271,8 +271,10 @@ class TestFaebot:
     def test_prompt_templates(self):
         """Test that prompt templates contain expected placeholders"""
         assert "{server}" in PROMPT_TEMPLATES["default"]
+        assert "{history_length}" in PROMPT_TEMPLATES["default"]
         assert "{conversants}" in PROMPT_TEMPLATES["dm"]
         assert "development bot" in PROMPT_TEMPLATES["dev"]
+        assert "{reply_frequency}" in PROMPT_TEMPLATES["dev"]
 
     @pytest.mark.asyncio
     async def test_conversation_logging(self, faebot, mock_message):
@@ -359,6 +361,8 @@ class TestFaebot:
         mock_message.channel.topic = "Cool test topic"
         faebot.conversations[conversation_id] = {
             "conversants": ["test_user"],
+            "history_length": 20,
+            "reply_frequency": 0.05,
         }
 
         rendered = faebot._render_prompt("default", mock_message, conversation_id)
@@ -366,17 +370,24 @@ class TestFaebot:
         assert "{server}" not in rendered
         assert "{channel}" not in rendered
         assert "{topic}" not in rendered
+        assert "{history_length}" not in rendered
+        assert "{reply_frequency}" not in rendered
         assert "Test Server" in rendered
         assert "test-channel" in rendered
         assert "Cool test topic" in rendered
+        assert "20" in rendered
+        assert "5%" in rendered
 
     def test_render_prompt_dm_template(self, faebot, mock_message):
         """Test that DM template renders conversants"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
             "conversants": ["alice", "bob"],
+            "history_length": 50,
+            "reply_frequency": 1.0,
         }
 
         rendered = faebot._render_prompt("dm", mock_message, conversation_id)
 
         assert "alice, bob" in rendered
+        assert "50" in rendered

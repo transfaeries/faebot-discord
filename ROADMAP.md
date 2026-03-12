@@ -28,6 +28,7 @@
 - [ ] Character document (parallel to faebot-history.md on Twitch)
 - [ ] Resolve @mentions in conversation history (replace `<@id>` with display names)
 - [ ] Resolve custom emoji in conversation history (replace `<:name:id>` with readable form)
+- [ ] PluralKit protocol — handle proxied messages (double-message dedup, wait-before-reply)
 
 ## Phase 5: Code Quality & Cleanup
 - [ ] Move aiohttp to production dependencies
