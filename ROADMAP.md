@@ -43,6 +43,13 @@
 - [ ] Align with Twitch bot refactor for eventual shared core
 - [ ] Event queue for generation status
 
+## Phase 6.5: Cross-Channel Awareness
+- [ ] Store guild_id in conversation dict for server grouping
+- [ ] At render time, include faebot's recent activity in sibling channels (same server)
+- [ ] Use bot_messages table — pull last faebot response + context per sibling channel
+- [ ] Stale conversations get a summary, active ones get recent messages
+- [ ] Gives faebot something to say in quiet channels by drawing on other conversations
+
 ## Phase 7: Memory System (cross-project)
 - [ ] Per-user memory in DB (regulars, interests, past interactions)
 - [ ] Long-term persistent facts (channel history, faebot's own memories)
