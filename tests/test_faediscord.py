@@ -56,6 +56,9 @@ class TestFaebot:
         message.guild = Mock()
         message.guild.name = "Test Server"
         message.reference = None
+        message.mentions = []
+        message.role_mentions = []
+        message.channel_mentions = []
         return message
 
     def test_init(self, faebot):
@@ -255,6 +258,9 @@ class TestFaebot:
         ref_msg.author.name = "other_user"
         ref_msg.content = "original message"
         ref_msg.created_at.strftime.return_value = "2024-01-01 11:59:00"
+        ref_msg.mentions = []
+        ref_msg.role_mentions = []
+        ref_msg.channel_mentions = []
 
         mock_message.reference = Mock()
         mock_message.reference.resolved = ref_msg
@@ -391,3 +397,66 @@ class TestFaebot:
 
         assert "alice, bob" in rendered
         assert "50" in rendered
+
+    def test_resolve_discord_formatting_mentions(self, faebot):
+        """Test that @mentions are resolved to display names"""
+        message = Mock()
+        user1 = Mock()
+        user1.id = 882358999830364212
+        user1.display_name = "Ember"
+        user2 = Mock()
+        user2.id = 123456789012345678
+        user2.display_name = "Aisling"
+        message.mentions = [user1, user2]
+        message.role_mentions = []
+        message.channel_mentions = []
+
+        content = "hey <@882358999830364212> and <@!123456789012345678> what's up"
+        result = faebot._resolve_discord_formatting(content, message)
+
+        assert result == "hey @Ember and @Aisling what's up"
+
+    def test_resolve_discord_formatting_emoji(self, faebot):
+        """Test that custom emoji are resolved to :name: form"""
+        message = Mock()
+        message.mentions = []
+        message.role_mentions = []
+        message.channel_mentions = []
+
+        content = "love this <:faebotyay:1465010932068519999> so much <a:danceparty:9876543210>"
+        result = faebot._resolve_discord_formatting(content, message)
+
+        assert result == "love this :faebotyay: so much :danceparty:"
+
+    def test_resolve_discord_formatting_channels_and_roles(self, faebot):
+        """Test that channel and role mentions are resolved"""
+        message = Mock()
+        message.mentions = []
+        role = Mock()
+        role.id = 111222333444555666
+        role.name = "Moderators"
+        message.role_mentions = [role]
+        channel = Mock()
+        channel.id = 999888777666555444
+        channel.name = "general"
+        message.channel_mentions = [channel]
+
+        content = "ping <@&111222333444555666> check <#999888777666555444>"
+        result = faebot._resolve_discord_formatting(content, message)
+
+        assert result == "ping @Moderators check #general"
+
+    def test_resolve_discord_formatting_mixed(self, faebot):
+        """Test resolving a message with mentions, emoji, and channels together"""
+        message = Mock()
+        user = Mock()
+        user.id = 882358999830364212
+        user.display_name = "Ember"
+        message.mentions = [user]
+        message.role_mentions = []
+        message.channel_mentions = []
+
+        content = "<@882358999830364212> look at this <:sparkle:123456> in the chat"
+        result = faebot._resolve_discord_formatting(content, message)
+
+        assert result == "@Ember look at this :sparkle: in the chat"

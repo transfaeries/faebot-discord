@@ -4,6 +4,7 @@
 import os
 import logging
 import random
+import re
 from typing import Any, Dict, Optional
 import asyncio
 import discord
@@ -116,7 +117,12 @@ class Faebot(discord.Client):
         reply_frequency = 0
         if conversation_id in self.conversations:
             conv = self.conversations[conversation_id]
-            conversants = ", ".join(conv.get("conversants", []))
+            conversants_data = conv.get("conversants", {})
+            # Support both old list format and new dict format
+            if isinstance(conversants_data, dict):
+                conversants = ", ".join(conversants_data.values())
+            else:
+                conversants = ", ".join(conversants_data)
             history_length = conv["history_length"]
             reply_frequency = conv["reply_frequency"]
 
@@ -128,6 +134,31 @@ class Faebot(discord.Client):
             history_length=history_length,
             reply_frequency=int(reply_frequency * 100),
         )
+
+    def _resolve_discord_formatting(self, content, message):
+        """Replace Discord internal formatting with human-readable text.
+
+        Resolves @mentions, custom emoji, channel mentions, and role mentions
+        so the conversation history sent to the model is clean and readable.
+        """
+        # Resolve @mentions: <@123456> or <@!123456> -> @display_name
+        for user in message.mentions:
+            content = content.replace(f"<@{user.id}>", f"@{user.display_name}")
+            content = content.replace(f"<@!{user.id}>", f"@{user.display_name}")
+
+        # Resolve custom emoji: <:name:id> or <a:name:id> -> :name:
+        content = re.sub(r"<a?:(\w+):\d+>", r":\1:", content)
+
+        # Resolve role mentions: <@&id> -> @role_name
+        for role in message.role_mentions:
+            content = content.replace(f"<@&{role.id}>", f"@{role.name}")
+
+        # Resolve channel mentions: <#id> -> #channel_name
+        if hasattr(message, "channel_mentions"):
+            for channel in message.channel_mentions:
+                content = content.replace(f"<#{channel.id}>", f"#{channel.name}")
+
+        return content
 
     async def on_ready(self):
         """runs when bot is ready"""
@@ -178,9 +209,10 @@ class Faebot(discord.Client):
                     else:
                         logging.warning(f"Periodic save failed for {conversation_id}")
 
-            author = message.author.name
-            if author not in self.conversations[conversation_id]["conversants"]:
-                self.conversations[conversation_id]["conversants"].append(author)
+            author = message.author.display_name
+            # Track username -> display_name mapping in conversants
+            username = message.author.name
+            self.conversations[conversation_id]["conversants"][username] = author
 
             # If message is a reply, log the referenced message first if we don't have it
             if (
@@ -190,7 +222,10 @@ class Faebot(discord.Client):
             ):
                 ref_msg = message.reference.resolved
                 ref_time = ref_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                ref_entry = f"[{ref_time}] {ref_msg.author.name}: {ref_msg.content}"
+                ref_content = self._resolve_discord_formatting(
+                    ref_msg.content, ref_msg
+                )
+                ref_entry = f"[{ref_time}] {ref_msg.author.display_name}: {ref_content}"
 
                 # Only add if not already in conversation
                 if ref_entry not in self.conversations[conversation_id]["conversation"]:
@@ -198,15 +233,18 @@ class Faebot(discord.Client):
                         f"[Referenced message] {ref_entry}"
                     )
 
-            # Log the current message with timestamp
+            # Log the current message with timestamp, resolving Discord formatting
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            resolved_content = self._resolve_discord_formatting(
+                message.content, message
+            )
             if hasattr(message, "reference") and message.reference:
                 self.conversations[conversation_id]["conversation"].append(
-                    f"[{current_time}] {author} replied: {message.content}"
+                    f"[{current_time}] {author} replied: {resolved_content}"
                 )
             else:
                 self.conversations[conversation_id]["conversation"].append(
-                    f"[{current_time}] {author}: {message.content}"
+                    f"[{current_time}] {author}: {resolved_content}"
                 )
 
             # Use our helper function to trim the conversation if needed
@@ -271,7 +309,7 @@ class Faebot(discord.Client):
         elif message.channel.type[0] == "private":
             template = "dm"
             reply_frequency = 1
-            name = str(message.author.name)
+            name = str(message.author.display_name)
         else:
             return await message.channel.send(
                 "Unknown channel type. Unable to proceed. Please contact administrator"
@@ -281,7 +319,7 @@ class Faebot(discord.Client):
         self.conversations[conversation_id] = {
             "id": conversation_id,
             "conversation": [],
-            "conversants": [str(message.author.name)],
+            "conversants": {message.author.name: message.author.display_name},
             "history_length": 20,
             "reply_frequency": reply_frequency,
             "name": name,
