@@ -160,7 +160,7 @@ class FaebotDatabase:
                     return {
                         "id": conversation_id,
                         "conversation": history,
-                        "conversants": metadata.get("conversants", []),
+                        "conversants": metadata.get("conversants", {}),
                         "history_length": metadata.get("history_length", 69),
                         "reply_frequency": metadata.get("reply_frequency", 0.05),
                         "name": metadata.get("name", "Unknown"),
@@ -370,7 +370,7 @@ class FaebotDatabase:
                         conversations[conversation_id] = {
                             "id": conversation_id,
                             "conversation": history,
-                            "conversants": metadata.get("conversants", []),
+                            "conversants": metadata.get("conversants", {}),
                             "history_length": metadata.get("history_length", 69),
                             "reply_frequency": metadata.get("reply_frequency", 0.05),
                             "name": metadata.get("name", "Unknown"),

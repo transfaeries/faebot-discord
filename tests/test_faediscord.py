@@ -45,6 +45,7 @@ class TestFaebot:
         message = Mock()
         message.author = Mock()
         message.author.name = "test_user"
+        message.author.display_name = "Test User"
         message.content = "test message"
         message.channel = Mock()
         message.channel.id = 123456789
@@ -120,7 +121,7 @@ class TestFaebot:
         assert conversation_id in faebot.conversations
         conv = faebot.conversations[conversation_id]
         assert conv["id"] == conversation_id
-        assert conv["conversants"] == [mock_message.author.name]
+        assert conv["conversants"] == {mock_message.author.name: mock_message.author.display_name}
         assert conv["reply_frequency"] == 0.05
         assert conv["prompt_template"] == DEFAULT_TEMPLATE
         mock_message.channel.send.assert_called_once()
@@ -247,7 +248,7 @@ class TestFaebot:
         """Test handling of reply messages"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "conversants": [mock_message.author.name],
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
             "conversation": [],
             "history_length": 69,
             "reply_frequency": 0,
@@ -256,6 +257,7 @@ class TestFaebot:
         # Create a referenced message
         ref_msg = Mock()
         ref_msg.author.name = "other_user"
+        ref_msg.author.display_name = "Other User"
         ref_msg.content = "original message"
         ref_msg.created_at.strftime.return_value = "2024-01-01 11:59:00"
         ref_msg.mentions = []
@@ -287,7 +289,7 @@ class TestFaebot:
         """Test that conversations are properly logged"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "conversants": [],
+            "conversants": {},
             "conversation": [],
             "history_length": 69,
             "reply_frequency": 0,
@@ -296,7 +298,7 @@ class TestFaebot:
         with patch.object(faebot, "_should_respond_to_message", return_value=False):
             await faebot.on_message(mock_message)
 
-            # Check that message was logged
+            # Check that message was logged (username as key in conversants dict)
             assert (
                 mock_message.author.name
                 in faebot.conversations[conversation_id]["conversants"]
@@ -313,7 +315,7 @@ class TestFaebot:
         # Create a conversation that's over the limit
         long_conversation = ["msg" + str(i) for i in range(100)]
         faebot.conversations[conversation_id] = {
-            "conversants": [mock_message.author.name],
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
             "conversation": long_conversation,
             "history_length": 69,
             "reply_frequency": 0,
@@ -342,7 +344,7 @@ class TestFaebot:
         """Test that concurrent responses are handled properly"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "conversants": [mock_message.author.name],
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
             "conversation": [],
             "history_length": 69,
             "reply_frequency": 1.0,  # Always respond
@@ -366,7 +368,7 @@ class TestFaebot:
         conversation_id = str(mock_message.channel.id)
         mock_message.channel.topic = "Cool test topic"
         faebot.conversations[conversation_id] = {
-            "conversants": ["test_user"],
+            "conversants": {"test_user": "Test User"},
             "history_length": 20,
             "reply_frequency": 0.05,
         }
@@ -388,14 +390,14 @@ class TestFaebot:
         """Test that DM template renders conversants"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "conversants": ["alice", "bob"],
+            "conversants": {"alice": "Alice", "bob": "Bob"},
             "history_length": 50,
             "reply_frequency": 1.0,
         }
 
         rendered = faebot._render_prompt("dm", mock_message, conversation_id)
 
-        assert "alice, bob" in rendered
+        assert "Alice, Bob" in rendered
         assert "50" in rendered
 
     def test_resolve_discord_formatting_mentions(self, faebot):

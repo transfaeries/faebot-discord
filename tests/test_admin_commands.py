@@ -53,7 +53,7 @@ class TestAdminCommands:
                 "reply_frequency": 0.5,
                 "history_length": 50,
                 "prompt_template": "default",
-                "conversants": ["test_user"],
+                "conversants": {"test_user": "Test User"},
             },
             "789012": {
                 "id": "789012",
@@ -63,7 +63,7 @@ class TestAdminCommands:
                 "reply_frequency": 0.7,
                 "history_length": 100,
                 "prompt_template": "default",
-                "conversants": [],
+                "conversants": {},
             },
         }
         return mock_bot

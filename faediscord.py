@@ -117,12 +117,7 @@ class Faebot(discord.Client):
         reply_frequency = 0
         if conversation_id in self.conversations:
             conv = self.conversations[conversation_id]
-            conversants_data = conv.get("conversants", {})
-            # Support both old list format and new dict format
-            if isinstance(conversants_data, dict):
-                conversants = ", ".join(conversants_data.values())
-            else:
-                conversants = ", ".join(conversants_data)
+            conversants = ", ".join(conv.get("conversants", {}).values())
             history_length = conv["history_length"]
             reply_frequency = conv["reply_frequency"]
 

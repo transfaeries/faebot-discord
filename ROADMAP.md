@@ -26,8 +26,10 @@
 - [x] Use bot's display name in prompt instead of hardcoded "faebot"
 - [ ] Self-knowledge block — faebot can describe faerself, history, personality
 - [ ] Character document (parallel to faebot-history.md on Twitch)
-- [ ] Resolve @mentions in conversation history (replace `<@id>` with display names)
-- [ ] Resolve custom emoji in conversation history (replace `<:name:id>` with readable form)
+- [x] Resolve @mentions in conversation history (replace `<@id>` with display names)
+- [x] Resolve custom emoji in conversation history (replace `<:name:id>` with readable form)
+- [x] Use display names (not usernames) in conversation history
+- [x] Conversants stored as username→display_name dict for future memory/lookup
 - [ ] PluralKit protocol — handle proxied messages (double-message dedup, wait-before-reply)
 
 ## Phase 5: Code Quality & Cleanup
@@ -65,3 +67,5 @@
 - Web dashboard (port from Twitch)
 - Voice input for Discord voice channels
 - Reaction-based feedback loop for generation quality
+- Emoji tool — let faebot look up and use custom server emoji in responses
+- Tagging tool — let faebot @mention users by looking up display names
