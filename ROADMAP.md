@@ -21,7 +21,7 @@
 - [x] Mistral Small 3.1 24B base model
 - [x] Multi-stage Docker build with Tailscale
 
-## Phase 4: Prompt & Identity Rework (Current)
+## Phase 4: Prompt & Identity Rework (Done ✓)
 - [x] Rework faebot's Discord prompt (port learnings from Twitch prompt work)
 - [x] Use bot's display name in prompt instead of hardcoded "faebot"
 - [x] Self-knowledge block — faebot can describe faerself, history, personality
@@ -30,7 +30,7 @@
 - [x] Resolve custom emoji in conversation history (replace `<:name:id>` with readable form)
 - [x] Use display names (not usernames) in conversation history
 - [x] Conversants stored as username→display_name dict for future memory/lookup
-- [ ] PluralKit protocol — handle proxied messages (double-message dedup, wait-before-reply)
+- [x] PluralKit protocol — handle proxied messages (double-message dedup, wait-before-reply)
 
 ## Phase 5: Code Quality & Cleanup
 - [ ] Move aiohttp to production dependencies
