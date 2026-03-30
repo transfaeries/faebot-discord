@@ -127,7 +127,9 @@ class TestFaebot:
         assert conversation_id in faebot.conversations
         conv = faebot.conversations[conversation_id]
         assert conv["id"] == conversation_id
-        assert conv["conversants"] == {mock_message.author.name: mock_message.author.display_name}
+        assert conv["conversants"] == {
+            mock_message.author.name: mock_message.author.display_name
+        }
         assert conv["reply_frequency"] == 0.05
         assert conv["prompt_template"] == DEFAULT_TEMPLATE
         mock_message.channel.send.assert_called_once()
@@ -364,9 +366,7 @@ class TestFaebot:
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
                     with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
-                        await faebot._handle_conversation(
-                            mock_message, conversation_id
-                        )
+                        await faebot._handle_conversation(mock_message, conversation_id)
 
                         # Check that response task was cleaned up
                         assert conversation_id not in faebot.pending_responses
@@ -509,24 +509,25 @@ class TestFaebot:
     def test_proxy_content_matches_substring(self, faebot):
         """Test substring match (proxy tags stripped)"""
         # Original has proxy tag "<" at end, proxy has it stripped
-        assert faebot._proxy_content_matches(
-            "how bout this brownie-dev! nyaa! <",
-            "how bout this brownie-dev! nyaa!"
-        ) is True
+        assert (
+            faebot._proxy_content_matches(
+                "how bout this brownie-dev! nyaa! <", "how bout this brownie-dev! nyaa!"
+            )
+            is True
+        )
 
     def test_proxy_content_matches_prefix_tags(self, faebot):
         """Test substring match with prefix proxy tags"""
-        assert faebot._proxy_content_matches(
-            "[hello friends]",
-            "hello friends"
-        ) is True
+        assert faebot._proxy_content_matches("[hello friends]", "hello friends") is True
 
     def test_proxy_content_matches_too_short(self, faebot):
         """Test that tiny substrings don't match (false positive guard)"""
-        assert faebot._proxy_content_matches(
-            "this is a long message about many things",
-            "this"
-        ) is False
+        assert (
+            faebot._proxy_content_matches(
+                "this is a long message about many things", "this"
+            )
+            is False
+        )
 
     def test_proxy_content_matches_unrelated(self, faebot):
         """Test that unrelated content doesn't match"""
@@ -593,8 +594,14 @@ class TestFaebot:
         )
 
         assert len(faebot.conversations[conversation_id]["conversation"]) == 1
-        assert "Ember | transfaeries" in faebot.conversations[conversation_id]["conversation"][0]
-        assert "hello brownie-dev!" in faebot.conversations[conversation_id]["conversation"][0]
+        assert (
+            "Ember | transfaeries"
+            in faebot.conversations[conversation_id]["conversation"][0]
+        )
+        assert (
+            "hello brownie-dev!"
+            in faebot.conversations[conversation_id]["conversation"][0]
+        )
 
     # --- on_message proxy filter tests ---
 
@@ -682,9 +689,7 @@ class TestFaebot:
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
                     with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
-                        await faebot._handle_conversation(
-                            mock_message, conversation_id
-                        )
+                        await faebot._handle_conversation(mock_message, conversation_id)
                         mock_message.channel.send.assert_called_once_with("test reply")
 
         # Proxy state should be cleaned up
@@ -693,14 +698,10 @@ class TestFaebot:
     @pytest.mark.asyncio
     async def test_handle_conversation_proxy_swap(self, faebot, mock_message):
         """Test that _handle_conversation redirects to proxy message when one arrives"""
-        import asyncio
-
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
             "conversants": {mock_message.author.name: mock_message.author.display_name},
-            "conversation": [
-                "[2024-01-01 12:00:00] Test User: hello faebot! <"
-            ],
+            "conversation": ["[2024-01-01 12:00:00] Test User: hello faebot! <"],
             "history_length": 69,
             "reply_frequency": 1.0,
             "prompt_template": "default",
@@ -739,8 +740,6 @@ class TestFaebot:
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
                     with patch("asyncio.wait_for", side_effect=mock_wait_for):
-                        await faebot._handle_conversation(
-                            mock_message, conversation_id
-                        )
+                        await faebot._handle_conversation(mock_message, conversation_id)
 
         mock_message.channel.send.assert_called_once_with("hi ember!")

@@ -174,11 +174,16 @@ class Faebot(discord.Client):
             return False
         if original_content == proxy_content:
             return True
-        if proxy_content in original_content and len(proxy_content) >= len(original_content) * 0.5:
+        if (
+            proxy_content in original_content
+            and len(proxy_content) >= len(original_content) * 0.5
+        ):
             return True
         return False
 
-    def _swap_history_for_proxy(self, conversation_id, original_content, original_author, proxy_msg):
+    def _swap_history_for_proxy(
+        self, conversation_id, original_content, original_author, proxy_msg
+    ):
         """Replace the conversation history entry for an original message with its proxy version."""
         if conversation_id not in self.conversations:
             return
@@ -188,11 +193,13 @@ class Faebot(discord.Client):
         proxy_content = self._resolve_discord_formatting(proxy_msg.content, proxy_msg)
         proxy_entry = f"[{proxy_time}] {proxy_author}: {proxy_content}"
 
-        # Search from the end since the original is the most recent message
+        # Search from the end since the original was the most recently appended entry
         for i in range(len(conv) - 1, -1, -1):
             if original_author in conv[i] and original_content in conv[i]:
                 conv[i] = proxy_entry
-                logging.debug(f"Swapped history entry at index {i} for proxy: {proxy_author}")
+                logging.debug(
+                    f"Swapped history entry at index {i} for proxy: {proxy_author}"
+                )
                 return
 
         logging.warning("Could not find original message in history to swap for proxy")
@@ -205,7 +212,8 @@ class Faebot(discord.Client):
         self.recent_messages[conversation_id].append((msg_id, content, now))
         # Prune entries older than 10 seconds
         self.recent_messages[conversation_id] = [
-            (mid, c, t) for mid, c, t in self.recent_messages[conversation_id]
+            (mid, c, t)
+            for mid, c, t in self.recent_messages[conversation_id]
             if now - t < 10
         ]
 
@@ -216,7 +224,9 @@ class Faebot(discord.Client):
         """
         if conversation_id not in self.recent_messages:
             return None
-        for msg_id, content, timestamp in reversed(self.recent_messages[conversation_id]):
+        for msg_id, content, timestamp in reversed(
+            self.recent_messages[conversation_id]
+        ):
             if self._proxy_content_matches(content, proxy_content):
                 return (msg_id, content)
         return None
@@ -242,6 +252,14 @@ class Faebot(discord.Client):
         history entry, signals any waiting response coroutine, and returns
         early to prevent double-processing.
         """
+        # Ignore proxy messages in channels we're not tracking
+        if conversation_id not in self.conversations:
+            return
+
+        # Skip proxied admin commands (original already handled by command flow)
+        if message.content.startswith(COMMAND_PREFIX):
+            return
+
         match = self._find_matching_original(conversation_id, message.content)
         if match:
             _, original_content = match
@@ -255,7 +273,7 @@ class Faebot(discord.Client):
                         # Extract author from "[timestamp] Author: content" format
                         bracket_end = entry.find("] ")
                         if bracket_end != -1:
-                            rest = entry[bracket_end + 2:]
+                            rest = entry[bracket_end + 2 :]
                             colon_pos = rest.find(": ")
                             if colon_pos != -1:
                                 original_author = rest[:colon_pos]
@@ -272,7 +290,9 @@ class Faebot(discord.Client):
             # Track proxy author as conversant (display_name as both key and value)
             if conversation_id in self.conversations:
                 proxy_name = message.author.display_name
-                self.conversations[conversation_id]["conversants"][proxy_name] = proxy_name
+                self.conversations[conversation_id]["conversants"][
+                    proxy_name
+                ] = proxy_name
 
             # Store proxy and signal any waiting response coroutine
             self.proxy_recent[conversation_id] = message
@@ -288,11 +308,14 @@ class Faebot(discord.Client):
         # No matching original — this is a webhook message we haven't seen the original for.
         # Could be a proxy where the original was filtered (dot/comma prefix) or arrived
         # before faebot was tracking. Log it normally in conversation history.
+        # NOTE: This duplicates some logging from on_message — extract in Phase 6 refactor.
         if conversation_id in self.conversations:
             proxy_name = message.author.display_name
             self.conversations[conversation_id]["conversants"][proxy_name] = proxy_name
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            resolved_content = self._resolve_discord_formatting(message.content, message)
+            resolved_content = self._resolve_discord_formatting(
+                message.content, message
+            )
             self.conversations[conversation_id]["conversation"].append(
                 f"[{current_time}] {proxy_name}: {resolved_content}"
             )
@@ -354,9 +377,7 @@ class Faebot(discord.Client):
             ):
                 ref_msg = message.reference.resolved
                 ref_time = ref_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                ref_content = self._resolve_discord_formatting(
-                    ref_msg.content, ref_msg
-                )
+                ref_content = self._resolve_discord_formatting(ref_msg.content, ref_msg)
                 ref_entry = f"[{ref_time}] {ref_msg.author.display_name}: {ref_content}"
 
                 # Only add if not already in conversation
@@ -501,7 +522,9 @@ class Faebot(discord.Client):
         except asyncio.TimeoutError:
             # No proxy arrived — proceed with the original message
             self.proxy_recent.pop(conversation_id, None)
-            logging.debug(f"No proxy arrived for {conversation_id}, proceeding normally")
+            logging.debug(
+                f"No proxy arrived for {conversation_id}, proceeding normally"
+            )
         finally:
             self.proxy_pending.pop(conversation_id, None)
 
