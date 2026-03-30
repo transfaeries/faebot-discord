@@ -1,5 +1,6 @@
 #!/bin/sh
 
+# this file is necessary for the fly.io deployment to work, as it starts tailscaled and then the bot
 # Start tailscaled in the background
 /app/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
 

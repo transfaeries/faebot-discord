@@ -208,7 +208,7 @@ class FaebotDatabase:
                     "prompt_template", DEFAULT_TEMPLATE
                 ),
                 "model": conversation_data["model"],
-                "conversants": conversation_data.get("conversants", []),
+                "conversants": conversation_data.get("conversants", {}),
             }
 
             history = conversation_data.get("conversation", [])
