@@ -15,7 +15,7 @@ from admin_commands import (  # noqa: E402
     _set_or_return_model,
     _set_reply_frequency,
     _set_history_length,
-    _set_conversation_prompt,
+    _show_conversation_prompt,
     _toggle_debug_mode,
 )
 
@@ -52,10 +52,8 @@ class TestAdminCommands:
                 "model": "google/gemini-2.0-flash-001",
                 "reply_frequency": 0.5,
                 "history_length": 50,
-                "prompt": "Test prompt",
-                "channel_name": "test-channel",
-                "server_name": "test-server",
-                "channel_topic": "test-topic",
+                "prompt_template": "default",
+                "conversants": {"test_user": "Test User"},
             },
             "789012": {
                 "id": "789012",
@@ -64,7 +62,8 @@ class TestAdminCommands:
                 "model": "google/gemini-2.0-pro-001",
                 "reply_frequency": 0.7,
                 "history_length": 100,
-                "prompt": "Another test prompt",
+                "prompt_template": "default",
+                "conversants": {},
             },
         }
         return mock_bot
@@ -350,37 +349,22 @@ class TestAdminCommands:
 
     @pytest.mark.asyncio
     @patch("admin_commands.admin", "test_admin")  # Mock the admin env variable
-    async def test_set_conversation_prompt(self, setup_test_conversation, mock_message):
-        """Test setting a new prompt for a conversation"""
+    async def test_show_conversation_prompt(
+        self, setup_test_conversation, mock_message
+    ):
+        """Test showing the rendered prompt for a conversation"""
         mock_bot = setup_test_conversation
         conversation_id = "123456"
-        new_prompt = "New prompt with {server} and {channel} and {topic} placeholders"
-        expected_prompt = (
-            "New prompt with test-server and test-channel and test-topic placeholders"
-        )
-        mock_message.content = f"{COMMAND_PREFIX}prompt {new_prompt}"
+        mock_bot._render_prompt = MagicMock(return_value="Rendered test prompt")
 
-        await _set_conversation_prompt(
-            mock_bot, mock_message, ["prompt", new_prompt], conversation_id
-        )
-
-        assert mock_bot.conversations[conversation_id]["prompt"] == expected_prompt
-        mock_message.channel.send.assert_called_once_with(
-            f"Prompt set for conversation {conversation_id}: {expected_prompt}"
-        )
-
-    @pytest.mark.asyncio
-    @patch("admin_commands.admin", "test_admin")  # Mock the admin env variable
-    async def test_get_conversation_prompt(self, setup_test_conversation, mock_message):
-        """Test getting the current prompt for a conversation"""
-        mock_bot = setup_test_conversation
-        conversation_id = "123456"
-        current_prompt = mock_bot.conversations[conversation_id]["prompt"]
-
-        await _set_conversation_prompt(
+        await _show_conversation_prompt(
             mock_bot, mock_message, ["prompt"], conversation_id
         )
 
-        mock_message.channel.send.assert_called_once_with(
-            f"Current prompt for conversation {conversation_id}: {current_prompt}"
+        mock_bot._render_prompt.assert_called_once_with(
+            "default", mock_message, conversation_id
         )
+        mock_message.channel.send.assert_called_once()
+        call_args = mock_message.channel.send.call_args[0][0]
+        assert "default" in call_args
+        assert "Rendered test prompt" in call_args

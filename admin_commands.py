@@ -266,17 +266,10 @@ async def _set_history_length(bot, message, message_tokens, conversation_id):
 
 
 @admin_command("prompt")
-async def _set_conversation_prompt(
+async def _show_conversation_prompt(
     bot, message, message_tokens=None, conversation_id=None
 ):
-    """Set or get the prompt for a conversation. Usage: fae;prompt [conversation_id] [new_prompt]
-
-    Supports placeholders:
-    {server} - Server name
-    {channel} - Channel name
-    {topic} - Channel topic
-    {conversants} - People in the conversation
-    """
+    """Show the current rendered prompt for a conversation. Usage: fae;prompt [conversation_id]"""
     target_id = conversation_id
 
     # Check if first argument is a conversation ID
@@ -284,7 +277,6 @@ async def _set_conversation_prompt(
         potential_conv_id = message_tokens[1]
         if potential_conv_id in bot.conversations:
             target_id = potential_conv_id
-            message_tokens = [message_tokens[0]] + message_tokens[2:]
         elif potential_conv_id.isdigit():
             logging.debug(
                 f"Admin {message.author.name} attempted to access non-existent conversation {potential_conv_id}"
@@ -293,47 +285,15 @@ async def _set_conversation_prompt(
                 f"Conversation {potential_conv_id} not found"
             )
 
-    if len(message_tokens) > 1:
-        new_prompt = " ".join(message_tokens[1:])
+    template_name = bot.conversations[target_id].get("prompt_template", "default")
+    rendered = bot._render_prompt(template_name, message, target_id)
 
-        # Replace placeholders with actual values
-        conversation_data = bot.conversations[target_id]
-        new_prompt = new_prompt.replace(
-            "{server}", conversation_data.get("server_name", "")
-        )
-        new_prompt = new_prompt.replace(
-            "{channel}", conversation_data.get("channel_name", "")
-        )
-        new_prompt = new_prompt.replace(
-            "{topic}", conversation_data.get("channel_topic", "")
-        )
-        new_prompt = new_prompt.replace(
-            "{conversants}", ", ".join(conversation_data.get("conversants", ""))
-        )
-
-        bot.conversations[target_id]["prompt"] = new_prompt
-        prompt_preview = (
-            (new_prompt[:75] + "...") if len(new_prompt) > 75 else new_prompt
-        )
-        logging.debug(
-            f"Admin {message.author.name} changed prompt for conversation {target_id} to: {prompt_preview}"
-        )
-        return await message.channel.send(
-            f"Prompt set for conversation {target_id}: {prompt_preview}"
-        )
-    else:
-        current_prompt = bot.conversations[target_id]["prompt"]
-        prompt_preview = (
-            (current_prompt[:75] + "...")
-            if len(current_prompt) > 75
-            else current_prompt
-        )
-        logging.debug(
-            f"Admin {message.author.name} queried prompt for conversation {target_id}"
-        )
-        return await message.channel.send(
-            f"Current prompt for conversation {target_id}: {current_prompt}"
-        )
+    logging.debug(
+        f"Admin {message.author.name} queried prompt for conversation {target_id}"
+    )
+    return await message.channel.send(
+        f"**Template:** `{template_name}`\n**Rendered prompt:**\n{rendered}"
+    )
 
 
 @admin_command("debug")

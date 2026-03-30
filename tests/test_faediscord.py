@@ -1,7 +1,7 @@
 import pytest
 import os
 from unittest.mock import AsyncMock, Mock, patch
-from faediscord import Faebot, COMMAND_PREFIX, DEFAULT_PROMPT, DM_PROMPT, DEV_PROMPT
+from faediscord import Faebot, COMMAND_PREFIX, PROMPT_TEMPLATES, DEFAULT_TEMPLATE
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,6 +45,7 @@ class TestFaebot:
         message = Mock()
         message.author = Mock()
         message.author.name = "test_user"
+        message.author.display_name = "Test User"
         message.content = "test message"
         message.channel = Mock()
         message.channel.id = 123456789
@@ -56,6 +57,9 @@ class TestFaebot:
         message.guild = Mock()
         message.guild.name = "Test Server"
         message.reference = None
+        message.mentions = []
+        message.role_mentions = []
+        message.channel_mentions = []
         return message
 
     def test_init(self, faebot):
@@ -117,11 +121,9 @@ class TestFaebot:
         assert conversation_id in faebot.conversations
         conv = faebot.conversations[conversation_id]
         assert conv["id"] == conversation_id
-        assert conv["conversants"] == [mock_message.author.name]
+        assert conv["conversants"] == {mock_message.author.name: mock_message.author.display_name}
         assert conv["reply_frequency"] == 0.05
-        assert "Test Server" in conv["prompt"]
-        assert "test-channel" in conv["prompt"]
-        assert "Test topic" in conv["prompt"]
+        assert conv["prompt_template"] == DEFAULT_TEMPLATE
         mock_message.channel.send.assert_called_once()
 
     @pytest.mark.asyncio
@@ -145,7 +147,7 @@ class TestFaebot:
         assert conversation_id in faebot.conversations
         conv = faebot.conversations[conversation_id]
         assert conv["reply_frequency"] == 1
-        assert dm_message.author.name in conv["prompt"]
+        assert conv["prompt_template"] == "dm"
         dm_message.channel.send.assert_called_once()
 
     @pytest.mark.asyncio
@@ -193,7 +195,7 @@ class TestFaebot:
     async def test_generate_ai_response_error(self, faebot):
         """Test AI response generation error handling"""
         conversation_id = "test_conv"
-        faebot.conversations[conversation_id] = {"prompt": "test prompt"}
+        faebot.conversations[conversation_id] = {"prompt_template": "default"}
         faebot.session = AsyncMock()
         faebot.session.post.side_effect = Exception("API Error")
 
@@ -207,7 +209,7 @@ class TestFaebot:
         """Test successful reply generation"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "prompt": "test prompt",
+            "prompt_template": "default",
             "model": "test-model",
             "conversation": [],
         }
@@ -224,7 +226,7 @@ class TestFaebot:
         """Test reply generation error and retry logic"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "prompt": "test prompt",
+            "prompt_template": "default",
             "model": "test-model",
             "conversation": ["msg1", "msg2", "msg3", "msg4"],
         }
@@ -246,7 +248,7 @@ class TestFaebot:
         """Test handling of reply messages"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "conversants": [mock_message.author.name],
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
             "conversation": [],
             "history_length": 69,
             "reply_frequency": 0,
@@ -255,8 +257,12 @@ class TestFaebot:
         # Create a referenced message
         ref_msg = Mock()
         ref_msg.author.name = "other_user"
+        ref_msg.author.display_name = "Other User"
         ref_msg.content = "original message"
         ref_msg.created_at.strftime.return_value = "2024-01-01 11:59:00"
+        ref_msg.mentions = []
+        ref_msg.role_mentions = []
+        ref_msg.channel_mentions = []
 
         mock_message.reference = Mock()
         mock_message.reference.resolved = ref_msg
@@ -270,19 +276,20 @@ class TestFaebot:
             assert any("original message" in msg for msg in conversation)
             assert any("replied:" in msg for msg in conversation)
 
-    def test_environment_prompts(self):
-        """Test different prompts based on environment"""
-        # Test that different prompts are used based on environment
-        assert "{server}" in DEFAULT_PROMPT
-        assert "{conversants}" in DM_PROMPT
-        assert "development bot" in DEV_PROMPT
+    def test_prompt_templates(self):
+        """Test that prompt templates contain expected placeholders"""
+        assert "{server}" in PROMPT_TEMPLATES["default"]
+        assert "{history_length}" in PROMPT_TEMPLATES["default"]
+        assert "{conversants}" in PROMPT_TEMPLATES["dm"]
+        assert "development bot" in PROMPT_TEMPLATES["dev"]
+        assert "{reply_frequency}" in PROMPT_TEMPLATES["dev"]
 
     @pytest.mark.asyncio
     async def test_conversation_logging(self, faebot, mock_message):
         """Test that conversations are properly logged"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "conversants": [],
+            "conversants": {},
             "conversation": [],
             "history_length": 69,
             "reply_frequency": 0,
@@ -291,7 +298,7 @@ class TestFaebot:
         with patch.object(faebot, "_should_respond_to_message", return_value=False):
             await faebot.on_message(mock_message)
 
-            # Check that message was logged
+            # Check that message was logged (username as key in conversants dict)
             assert (
                 mock_message.author.name
                 in faebot.conversations[conversation_id]["conversants"]
@@ -308,7 +315,7 @@ class TestFaebot:
         # Create a conversation that's over the limit
         long_conversation = ["msg" + str(i) for i in range(100)]
         faebot.conversations[conversation_id] = {
-            "conversants": [mock_message.author.name],
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
             "conversation": long_conversation,
             "history_length": 69,
             "reply_frequency": 0,
@@ -337,11 +344,11 @@ class TestFaebot:
         """Test that concurrent responses are handled properly"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
-            "conversants": [mock_message.author.name],
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
             "conversation": [],
             "history_length": 69,
             "reply_frequency": 1.0,  # Always respond
-            "prompt": "test prompt",
+            "prompt_template": "default",
             "model": "test-model",
         }
 
@@ -356,21 +363,102 @@ class TestFaebot:
                     assert conversation_id not in faebot.pending_responses
                     mock_message.channel.send.assert_called_once_with("test response")
 
-    @pytest.mark.asyncio
-    async def test_prompt_placeholder_replacement(self, faebot, mock_message):
-        """Test that prompt placeholders are properly replaced"""
+    def test_render_prompt_replaces_placeholders(self, faebot, mock_message):
+        """Test that _render_prompt replaces placeholders with live context"""
         conversation_id = str(mock_message.channel.id)
         mock_message.channel.topic = "Cool test topic"
+        faebot.conversations[conversation_id] = {
+            "conversants": {"test_user": "Test User"},
+            "history_length": 20,
+            "reply_frequency": 0.05,
+        }
 
-        await faebot._initialize_conversation(
-            mock_message, conversation_id=conversation_id
-        )
+        rendered = faebot._render_prompt("default", mock_message, conversation_id)
 
-        prompt = faebot.conversations[conversation_id]["prompt"]
-        # Check that placeholders were replaced
-        assert "{server}" not in prompt
-        assert "{channel}" not in prompt
-        assert "{topic}" not in prompt
-        assert "Test Server" in prompt
-        assert "test-channel" in prompt
-        assert "Cool test topic" in prompt
+        assert "{server}" not in rendered
+        assert "{channel}" not in rendered
+        assert "{topic}" not in rendered
+        assert "{history_length}" not in rendered
+        assert "{reply_frequency}" not in rendered
+        assert "Test Server" in rendered
+        assert "test-channel" in rendered
+        assert "Cool test topic" in rendered
+        assert "20" in rendered
+        assert "5%" in rendered
+
+    def test_render_prompt_dm_template(self, faebot, mock_message):
+        """Test that DM template renders conversants"""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {"alice": "Alice", "bob": "Bob"},
+            "history_length": 50,
+            "reply_frequency": 1.0,
+        }
+
+        rendered = faebot._render_prompt("dm", mock_message, conversation_id)
+
+        assert "Alice, Bob" in rendered
+        assert "50" in rendered
+
+    def test_resolve_discord_formatting_mentions(self, faebot):
+        """Test that @mentions are resolved to display names"""
+        message = Mock()
+        user1 = Mock()
+        user1.id = 882358999830364212
+        user1.display_name = "Ember"
+        user2 = Mock()
+        user2.id = 123456789012345678
+        user2.display_name = "Aisling"
+        message.mentions = [user1, user2]
+        message.role_mentions = []
+        message.channel_mentions = []
+
+        content = "hey <@882358999830364212> and <@!123456789012345678> what's up"
+        result = faebot._resolve_discord_formatting(content, message)
+
+        assert result == "hey @Ember and @Aisling what's up"
+
+    def test_resolve_discord_formatting_emoji(self, faebot):
+        """Test that custom emoji are resolved to :name: form"""
+        message = Mock()
+        message.mentions = []
+        message.role_mentions = []
+        message.channel_mentions = []
+
+        content = "love this <:faebotyay:1465010932068519999> so much <a:danceparty:9876543210>"
+        result = faebot._resolve_discord_formatting(content, message)
+
+        assert result == "love this :faebotyay: so much :danceparty:"
+
+    def test_resolve_discord_formatting_channels_and_roles(self, faebot):
+        """Test that channel and role mentions are resolved"""
+        message = Mock()
+        message.mentions = []
+        role = Mock()
+        role.id = 111222333444555666
+        role.name = "Moderators"
+        message.role_mentions = [role]
+        channel = Mock()
+        channel.id = 999888777666555444
+        channel.name = "general"
+        message.channel_mentions = [channel]
+
+        content = "ping <@&111222333444555666> check <#999888777666555444>"
+        result = faebot._resolve_discord_formatting(content, message)
+
+        assert result == "ping @Moderators check #general"
+
+    def test_resolve_discord_formatting_mixed(self, faebot):
+        """Test resolving a message with mentions, emoji, and channels together"""
+        message = Mock()
+        user = Mock()
+        user.id = 882358999830364212
+        user.display_name = "Ember"
+        message.mentions = [user]
+        message.role_mentions = []
+        message.channel_mentions = []
+
+        content = "<@882358999830364212> look at this <:sparkle:123456> in the chat"
+        result = faebot._resolve_discord_formatting(content, message)
+
+        assert result == "@Ember look at this :sparkle: in the chat"

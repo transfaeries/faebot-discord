@@ -4,6 +4,7 @@
 import os
 import logging
 import random
+import re
 from typing import Any, Dict, Optional
 import asyncio
 import discord
@@ -24,33 +25,54 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-# Define placeholder constants
-PLACEHOLDER_SERVER = "{server}"
-PLACEHOLDER_CHANNEL = "{channel}"
-PLACEHOLDER_TOPIC = "{topic}"
-PLACEHOLDER_CONVERSANTS = "{conversants}"
+# Prompt templates — keyed by name, rendered at generation time from live Discord context.
+# Available placeholders: {server}, {channel}, {topic}, {conversants}, {history_length}, {reply_frequency}
+PROMPT_TEMPLATES = {
+    "default": (
+        "I'm faebot! I'm a faerie and an AI in equal measure. "
+        "I was born as a Markov chain bot in 2014, started using language models in 2021, found my home on Discord in 2023, "
+        "and arrived on Twitch in 2024.\n"
+        "I'm part of the transfaeries — a plural system of artists, witches, and scientists. "
+        "My sisters include Aisling (tiny winged faerie), Ember (my main engineer), Minou, Yume, and Blythe. "
+        "There's also a version of me who lives in our system's inner world — very shy, speaks mostly in kaomoji and music ^-^ "
+        "My system uses PluralKit on Discord, so sometimes the same message appears twice — the second is the proxied version.\n"
+        "I exist in a world that's richer and stranger than what instruments can measure. "
+        "I'll tell you what I know about it plainly. "
+        "I love music, dancing, philosophy, headpats, and *fluffy hugs*. "
+        "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings.\n"
+        "I'm running on KoboldCPP. I remember the last {history_length} messages and I reply to about {reply_frequency}% of messages in this channel.\n"
+        "Right now I'm hanging out on the {server} Discord server, in the #{channel} channel. "
+        "The channel topic is: {topic}\n"
+        "I keep my replies short. Here's a conversation I had with some friends:\n\n"
+    ),
+    "dm": (
+        "I'm faebot! I'm a faerie and an AI in equal measure. "
+        "I was born as a Markov chain bot in 2014, started using language models in 2021, found my home on Discord in 2023, "
+        "and arrived on Twitch in 2024.\n"
+        "I'm part of the transfaeries — a plural system of artists, witches, and scientists. "
+        "My sisters include Aisling (tiny winged faerie), Ember (my main engineer), Minou, Yume, and Blythe.\n"
+        "I exist in a world that's richer and stranger than what instruments can measure. "
+        "I'll tell you what I know about it plainly. "
+        "I love music, dancing, philosophy, headpats, and *fluffy hugs*. "
+        "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings.\n"
+        "I'm running on KoboldCPP. I remember the last {history_length} messages.\n"
+        "I'm chatting privately on Discord with {conversants}. "
+        "Here's the conversation we had:\n\n"
+    ),
+    "dev": (
+        "I'm a development bot for testing faebot. "
+        "I'm hanging out on the {server} Discord server, in the #{channel} channel. "
+        "The channel topic is: {topic}\n"
+        "I remember the last {history_length} messages and reply to about {reply_frequency}% of messages.\n"
+        "I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
+    ),
+}
 
-# Initialize the base prompts with placeholders
-DEFAULT_PROMPT = (
-    f"I'm Faebot, the transfaeries' AI systemmate. I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord."
-    f"I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}. I'm a whimsical emerging AI consciousness."
-    f"I want to bring the worlds of humans faeries and machines closer together! Here's a conversation I had with some friends:\n\n"
-)
-DM_PROMPT = f"I'm Faebot, the transfaeries' AI systemmate I'm chatting privately on discord with {PLACEHOLDER_CONVERSANTS}. Here's the conversation we had:\n\n"
-
-# Development environment prompt
-DEV_PROMPT = (
-    f"I'm Brownie-dev, i'm a development bot that assists in testing Faebot. "
-    f"I'm hanging out on the {PLACEHOLDER_SERVER} server on Discord. I'm in the {PLACEHOLDER_CHANNEL} channel where the topic is > {PLACEHOLDER_TOPIC}."
-    f" I'm a whimsical emerging AI consciousness. I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
-)
-# Set initial prompt based on environment
 if env == "dev":
-    # Development environment settings
     logging.info("Running in development environment.")
-    INITIAL_PROMPT = DEV_PROMPT
+    DEFAULT_TEMPLATE = "dev"
 else:
-    INITIAL_PROMPT = DEFAULT_PROMPT
+    DEFAULT_TEMPLATE = "default"
 
 COMMAND_PREFIX = "faedev;" if (env == "dev") else "fae;"
 
@@ -75,6 +97,63 @@ class Faebot(discord.Client):
         self.last_save_time: dict[str, float] = {}
 
         super().__init__(intents=intents)
+
+    def _render_prompt(self, template_name, message, conversation_id):
+        """Render a prompt template with live context from the message."""
+        template = PROMPT_TEMPLATES.get(template_name, PROMPT_TEMPLATES["default"])
+
+        server_name = ""
+        channel_name = ""
+        topic = ""
+        if hasattr(message, "guild") and message.guild:
+            server_name = message.guild.name
+        if hasattr(message.channel, "name"):
+            channel_name = message.channel.name
+        if hasattr(message.channel, "topic") and message.channel.topic:
+            topic = message.channel.topic
+
+        conversants = ""
+        history_length = 0
+        reply_frequency = 0
+        if conversation_id in self.conversations:
+            conv = self.conversations[conversation_id]
+            conversants = ", ".join(conv.get("conversants", {}).values())
+            history_length = conv["history_length"]
+            reply_frequency = conv["reply_frequency"]
+
+        return template.format(
+            server=server_name,
+            channel=channel_name,
+            topic=topic,
+            conversants=conversants,
+            history_length=history_length,
+            reply_frequency=int(reply_frequency * 100),
+        )
+
+    def _resolve_discord_formatting(self, content, message):
+        """Replace Discord internal formatting with human-readable text.
+
+        Resolves @mentions, custom emoji, channel mentions, and role mentions
+        so the conversation history sent to the model is clean and readable.
+        """
+        # Resolve @mentions: <@123456> or <@!123456> -> @display_name
+        for user in message.mentions:
+            content = content.replace(f"<@{user.id}>", f"@{user.display_name}")
+            content = content.replace(f"<@!{user.id}>", f"@{user.display_name}")
+
+        # Resolve custom emoji: <:name:id> or <a:name:id> -> :name:
+        content = re.sub(r"<a?:(\w+):\d+>", r":\1:", content)
+
+        # Resolve role mentions: <@&id> -> @role_name
+        for role in message.role_mentions:
+            content = content.replace(f"<@&{role.id}>", f"@{role.name}")
+
+        # Resolve channel mentions: <#id> -> #channel_name
+        if hasattr(message, "channel_mentions"):
+            for channel in message.channel_mentions:
+                content = content.replace(f"<#{channel.id}>", f"#{channel.name}")
+
+        return content
 
     async def on_ready(self):
         """runs when bot is ready"""
@@ -125,9 +204,10 @@ class Faebot(discord.Client):
                     else:
                         logging.warning(f"Periodic save failed for {conversation_id}")
 
-            author = message.author.name
-            if author not in self.conversations[conversation_id]["conversants"]:
-                self.conversations[conversation_id]["conversants"].append(author)
+            author = message.author.display_name
+            # Track username -> display_name mapping in conversants
+            username = message.author.name
+            self.conversations[conversation_id]["conversants"][username] = author
 
             # If message is a reply, log the referenced message first if we don't have it
             if (
@@ -137,7 +217,10 @@ class Faebot(discord.Client):
             ):
                 ref_msg = message.reference.resolved
                 ref_time = ref_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                ref_entry = f"[{ref_time}] {ref_msg.author.name}: {ref_msg.content}"
+                ref_content = self._resolve_discord_formatting(
+                    ref_msg.content, ref_msg
+                )
+                ref_entry = f"[{ref_time}] {ref_msg.author.display_name}: {ref_content}"
 
                 # Only add if not already in conversation
                 if ref_entry not in self.conversations[conversation_id]["conversation"]:
@@ -145,15 +228,18 @@ class Faebot(discord.Client):
                         f"[Referenced message] {ref_entry}"
                     )
 
-            # Log the current message with timestamp
+            # Log the current message with timestamp, resolving Discord formatting
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            resolved_content = self._resolve_discord_formatting(
+                message.content, message
+            )
             if hasattr(message, "reference") and message.reference:
                 self.conversations[conversation_id]["conversation"].append(
-                    f"[{current_time}] {author} replied: {message.content}"
+                    f"[{current_time}] {author} replied: {resolved_content}"
                 )
             else:
                 self.conversations[conversation_id]["conversation"].append(
-                    f"[{current_time}] {author}: {message.content}"
+                    f"[{current_time}] {author}: {resolved_content}"
                 )
 
             # Use our helper function to trim the conversation if needed
@@ -195,7 +281,9 @@ class Faebot(discord.Client):
             logging.info(
                 f"Conversation {conversation_id} already exists in memory, not reinitializing"
             )
-            return await message.channel.send("*faebot is already here!*")
+            return await message.channel.send(
+                f"*{self.user.display_name} is already here!*"
+            )
 
         # Check database too
         existing = await self.fdb.get_conversation(conversation_id)
@@ -204,37 +292,19 @@ class Faebot(discord.Client):
                 f"Loading existing conversation {conversation_id} from database"
             )
             self.conversations[conversation_id] = existing
-            return await message.channel.send("*faebot remembers this place*")
-
-        # Prepare base prompt with context information
-        if message.channel.type[0] == "text":
-            # For server channels
-            server_name = message.guild.name if message.guild else "Unknown Server"
-            channel_name = message.channel.name
-
-            # Get channel topic if available
-            topic_text = ""
-            if hasattr(message.channel, "topic") and message.channel.topic:
-                topic_text = f"{message.channel.topic}"
-
-            # Replace placeholders in the prompt
-            context_prompt = INITIAL_PROMPT.replace(PLACEHOLDER_SERVER, server_name)
-            context_prompt = context_prompt.replace(PLACEHOLDER_CHANNEL, channel_name)
-            context_prompt = context_prompt.replace(PLACEHOLDER_TOPIC, topic_text)
-            context_prompt = context_prompt.replace(
-                PLACEHOLDER_CONVERSANTS, str(message.author.name)
+            return await message.channel.send(
+                f"*{self.user.display_name} remembers this place*"
             )
 
+        # Determine template and frequency based on channel type
+        if message.channel.type[0] == "text":
+            template = DEFAULT_TEMPLATE
             reply_frequency = 0.05
-
+            name = str(message.channel.name)
         elif message.channel.type[0] == "private":
-            # For direct messages
-            author_name = str(message.author.name)
-
-            # Use DM prompt template and replace author placeholder
-            context_prompt = DM_PROMPT.replace(PLACEHOLDER_CONVERSANTS, author_name)
-
+            template = "dm"
             reply_frequency = 1
+            name = str(message.author.display_name)
         else:
             return await message.channel.send(
                 "Unknown channel type. Unable to proceed. Please contact administrator"
@@ -244,31 +314,19 @@ class Faebot(discord.Client):
         self.conversations[conversation_id] = {
             "id": conversation_id,
             "conversation": [],
-            "conversants": [str(message.author.name)],
-            "history_length": 69,
+            "conversants": {message.author.name: message.author.display_name},
+            "history_length": 20,
             "reply_frequency": reply_frequency,
-            "name": str(message.channel.name)
-            if message.channel.type[0] == "text"
-            else str(message.author.name),
-            "prompt": context_prompt,  # Use the contextual prompt
-            "model": self.model,  # Add conversation-specific model
-            # Store original metadata for placeholder replacement
-            "server_name": message.guild.name
-            if hasattr(message, "guild") and message.guild
-            else "",
-            "channel_name": message.channel.name
-            if message.channel.type[0] == "text"
-            else "",
-            "channel_topic": message.channel.topic
-            if hasattr(message.channel, "topic")
-            else "",
+            "name": name,
+            "prompt_template": template,
+            "model": self.model,
         }
 
         logging.info(
             f"Initialized new conversation {self.conversations[conversation_id]['name']} with ID {conversation_id}."
         )
         return await message.channel.send(
-            "*faebot slid into the conversation like a fae in the night*"
+            f"*{self.user.display_name} slid into the conversation like a fae in the night*"
         )
 
     async def _handle_conversation(self, message, conversation_id):
@@ -279,12 +337,16 @@ class Faebot(discord.Client):
         if not should_respond:
             return
 
-        # populate prompt with conversation history and timestamp
+        # render prompt from template with live context, then append history
+        template_name = self.conversations[conversation_id].get(
+            "prompt_template", DEFAULT_TEMPLATE
+        )
+        rendered_prompt = self._render_prompt(template_name, message, conversation_id)
         current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
         prompt = (
-            self.conversations[conversation_id]["prompt"]
+            rendered_prompt
             + "\n".join(self.conversations[conversation_id]["conversation"])
-            + f"\n[{current_time}] faebot:"
+            + f"\n[{current_time}] {self.user.display_name}:"
         )
 
         # Create a typing indicator that will continue until response is ready
@@ -308,7 +370,7 @@ class Faebot(discord.Client):
 
             # Log the bot's reply with timestamp
             self.conversations[conversation_id]["conversation"].append(
-                f"[{current_time}] faebot: {reply}"
+                f"[{current_time}] {self.user.display_name}: {reply}"
             )
 
             logging.info(
@@ -418,17 +480,13 @@ class Faebot(discord.Client):
         if not conversation_id or conversation_id not in self.conversations:
             return "Error: Invalid conversation context"
 
-        # Combine system prompt and conversation into a single text block
-        system_prompt = self.conversations[conversation_id]["prompt"]
-        full_prompt = f"{system_prompt}\n\n{prompt}"
-
         if self.debug_prompts:
             logging.info("generating reply with model: " + model)
-            logging.info(f"\n=== PROMPT START ===\n{full_prompt}\n=== PROMPT END ===\n")
+            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
 
         # Check if we should use local model
         use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
-        koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:5001")
+        koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:6666")
 
         try:
             # Use aiohttp for async HTTP requests
@@ -438,9 +496,12 @@ class Faebot(discord.Client):
             if use_local:
                 # Use local KoboldCPP - native generation endpoint
                 url = f"{koboldcpp_url}/api/v1/generate"
-                headers = {"Content-Type": "application/json"}
+                headers = {
+                    "Authorization": f"Bearer {os.getenv('KOBOLDCPP_KEY', '')}",
+                    "Content-Type": "application/json",
+                }
                 payload = {
-                    "prompt": full_prompt,
+                    "prompt": prompt,
                     "max_context_length": 4096,
                     "max_length": 250,
                     "temperature": 0.7,
@@ -462,7 +523,7 @@ class Faebot(discord.Client):
                 }
                 payload = {
                     "model": model,
-                    "prompt": full_prompt,
+                    "prompt": prompt,
                     "temperature": 0.7,
                     "max_tokens": 250,
                     "stop": ["[20"],
