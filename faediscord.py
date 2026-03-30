@@ -5,7 +5,7 @@ import os
 import logging
 import random
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import asyncio
 import discord
 import aiohttp
@@ -96,6 +96,11 @@ class Faebot(discord.Client):
         # Track last save per conversation
         self.last_save_time: dict[str, float] = {}
 
+        # Proxy message handling (PluralKit, Tupperbox, etc.)
+        self.proxy_pending: Dict[str, asyncio.Event] = {}
+        self.proxy_recent: Dict[str, discord.Message] = {}
+        self.recent_messages: Dict[str, List[Tuple[int, str, float]]] = {}
+
         super().__init__(intents=intents)
 
     def _render_prompt(self, template_name, message, conversation_id):
@@ -155,6 +160,67 @@ class Faebot(discord.Client):
 
         return content
 
+    def _is_proxy_message(self, message) -> bool:
+        """Detect webhook-proxied messages (PluralKit, Tupperbox, etc.)."""
+        return message.webhook_id is not None and message.author.bot
+
+    def _proxy_content_matches(self, original_content: str, proxy_content: str) -> bool:
+        """Check if a proxy message's content matches an original message.
+
+        Handles both tag-stripping (proxy is substring of original) and
+        autoproxy (exact match). Guards against spurious short substring matches.
+        """
+        if not original_content or not proxy_content:
+            return False
+        if original_content == proxy_content:
+            return True
+        if proxy_content in original_content and len(proxy_content) >= len(original_content) * 0.5:
+            return True
+        return False
+
+    def _swap_history_for_proxy(self, conversation_id, original_content, original_author, proxy_msg):
+        """Replace the conversation history entry for an original message with its proxy version."""
+        if conversation_id not in self.conversations:
+            return
+        conv = self.conversations[conversation_id]["conversation"]
+        proxy_author = proxy_msg.author.display_name
+        proxy_time = proxy_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        proxy_content = self._resolve_discord_formatting(proxy_msg.content, proxy_msg)
+        proxy_entry = f"[{proxy_time}] {proxy_author}: {proxy_content}"
+
+        # Search from the end since the original is the most recent message
+        for i in range(len(conv) - 1, -1, -1):
+            if original_author in conv[i] and original_content in conv[i]:
+                conv[i] = proxy_entry
+                logging.debug(f"Swapped history entry at index {i} for proxy: {proxy_author}")
+                return
+
+        logging.warning("Could not find original message in history to swap for proxy")
+
+    def _buffer_recent_message(self, conversation_id, msg_id, content):
+        """Add a message to the recent message buffer for proxy matching."""
+        now = time.time()
+        if conversation_id not in self.recent_messages:
+            self.recent_messages[conversation_id] = []
+        self.recent_messages[conversation_id].append((msg_id, content, now))
+        # Prune entries older than 10 seconds
+        self.recent_messages[conversation_id] = [
+            (mid, c, t) for mid, c, t in self.recent_messages[conversation_id]
+            if now - t < 10
+        ]
+
+    def _find_matching_original(self, conversation_id, proxy_content):
+        """Find a recent message whose content matches a proxy message's content.
+
+        Returns (msg_id, original_content) or None.
+        """
+        if conversation_id not in self.recent_messages:
+            return None
+        for msg_id, content, timestamp in reversed(self.recent_messages[conversation_id]):
+            if self._proxy_content_matches(content, proxy_content):
+                return (msg_id, content)
+        return None
+
     async def on_ready(self):
         """runs when bot is ready"""
         # Create a shared aiohttp session for async requests
@@ -169,19 +235,90 @@ class Faebot(discord.Client):
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info("------")
 
+    async def _handle_proxy_message(self, message, conversation_id):
+        """Handle a webhook-proxied message (PluralKit, Tupperbox, etc.).
+
+        Matches the proxy to a recent original message, swaps the conversation
+        history entry, signals any waiting response coroutine, and returns
+        early to prevent double-processing.
+        """
+        match = self._find_matching_original(conversation_id, message.content)
+        if match:
+            _, original_content = match
+            # Find the original author from the history entry we're about to swap
+            # (we need the display name that was logged)
+            original_author = None
+            if conversation_id in self.conversations:
+                conv = self.conversations[conversation_id]["conversation"]
+                for entry in reversed(conv):
+                    if original_content in entry:
+                        # Extract author from "[timestamp] Author: content" format
+                        bracket_end = entry.find("] ")
+                        if bracket_end != -1:
+                            rest = entry[bracket_end + 2:]
+                            colon_pos = rest.find(": ")
+                            if colon_pos != -1:
+                                original_author = rest[:colon_pos]
+                                # Handle "Author replied:" format
+                                if original_author.endswith(" replied"):
+                                    original_author = original_author[:-8]
+                        break
+
+            if original_author:
+                self._swap_history_for_proxy(
+                    conversation_id, original_content, original_author, message
+                )
+
+            # Track proxy author as conversant (display_name as both key and value)
+            if conversation_id in self.conversations:
+                proxy_name = message.author.display_name
+                self.conversations[conversation_id]["conversants"][proxy_name] = proxy_name
+
+            # Store proxy and signal any waiting response coroutine
+            self.proxy_recent[conversation_id] = message
+            if conversation_id in self.proxy_pending:
+                self.proxy_pending[conversation_id].set()
+
+            logging.info(
+                f"Proxy detected: {message.author.display_name} in {conversation_id} "
+                f"(matched original: {match is not None})"
+            )
+            return
+
+        # No matching original — this is a webhook message we haven't seen the original for.
+        # Could be a proxy where the original was filtered (dot/comma prefix) or arrived
+        # before faebot was tracking. Log it normally in conversation history.
+        if conversation_id in self.conversations:
+            proxy_name = message.author.display_name
+            self.conversations[conversation_id]["conversants"][proxy_name] = proxy_name
+            current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            resolved_content = self._resolve_discord_formatting(message.content, message)
+            self.conversations[conversation_id]["conversation"].append(
+                f"[{current_time}] {proxy_name}: {resolved_content}"
+            )
+            self._trim_conversation_history(conversation_id)
+
+        logging.debug(
+            f"Proxy message with no matching original: {message.author.display_name} "
+            f"content={message.content!r}"
+        )
+
     async def on_message(self, message):
         """Handles what happens when the bot receives a message"""
         # don't respond to ourselves
         if message.author == self.user:
             return
 
+        conversation_id = str(message.channel.id)
+
+        # Handle proxy messages (PluralKit, Tupperbox, etc.)
+        if self._is_proxy_message(message):
+            return await self._handle_proxy_message(message, conversation_id)
+
         # ignore messages that start with a dot or comma if the message doesn't start with "..."
         if message.content.startswith(".") or message.content.startswith(","):
             if not message.content.startswith("..."):
                 return
-
-        # initialise conversation holder
-        conversation_id = str(message.channel.id)
 
         # detect and handle admin commands
         if message.content.startswith(COMMAND_PREFIX):
@@ -241,6 +378,9 @@ class Faebot(discord.Client):
                 self.conversations[conversation_id]["conversation"].append(
                     f"[{current_time}] {author}: {resolved_content}"
                 )
+
+            # Buffer for proxy matching (use raw content, not resolved)
+            self._buffer_recent_message(conversation_id, message.id, message.content)
 
             # Use our helper function to trim the conversation if needed
             self._trim_conversation_history(conversation_id)
@@ -336,6 +476,34 @@ class Faebot(discord.Client):
         should_respond = await self._should_respond_to_message(message, conversation_id)
         if not should_respond:
             return
+
+        # Wait for potential proxy replacement (PluralKit, Tupperbox, etc.)
+        # This gives proxy bots time to send the webhook copy before we generate.
+        pk_event = asyncio.Event()
+        self.proxy_pending[conversation_id] = pk_event
+
+        # Check if a proxy already arrived (race: proxy was faster than _should_respond)
+        if conversation_id in self.proxy_recent:
+            pk_msg = self.proxy_recent[conversation_id]
+            if self._proxy_content_matches(message.content, pk_msg.content):
+                pk_event.set()
+
+        try:
+            await asyncio.wait_for(pk_event.wait(), timeout=2.0)
+            # Proxy arrived — redirect response to the proxy message
+            pk_msg = self.proxy_recent.pop(conversation_id, None)
+            if pk_msg and self._proxy_content_matches(message.content, pk_msg.content):
+                logging.info(
+                    f"Proxy swap: responding to {pk_msg.author.display_name} "
+                    f"instead of {message.author.display_name}"
+                )
+                message = pk_msg
+        except asyncio.TimeoutError:
+            # No proxy arrived — proceed with the original message
+            self.proxy_recent.pop(conversation_id, None)
+            logging.debug(f"No proxy arrived for {conversation_id}, proceeding normally")
+        finally:
+            self.proxy_pending.pop(conversation_id, None)
 
         # render prompt from template with live context, then append history
         template_name = self.conversations[conversation_id].get(

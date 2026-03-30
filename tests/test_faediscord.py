@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 import os
 from unittest.mock import AsyncMock, Mock, patch
@@ -60,6 +61,8 @@ class TestFaebot:
         message.mentions = []
         message.role_mentions = []
         message.channel_mentions = []
+        message.webhook_id = None
+        message.id = 111111111111111111
         return message
 
     def test_init(self, faebot):
@@ -67,6 +70,9 @@ class TestFaebot:
         assert isinstance(faebot.conversations, dict)
         assert isinstance(faebot.retries, dict)
         assert isinstance(faebot.pending_responses, dict)
+        assert isinstance(faebot.proxy_pending, dict)
+        assert isinstance(faebot.proxy_recent, dict)
+        assert isinstance(faebot.recent_messages, dict)
         assert faebot.session is None
         assert faebot.model == os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")
 
@@ -357,11 +363,16 @@ class TestFaebot:
                 with patch.object(
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
-                    await faebot._handle_conversation(mock_message, conversation_id)
+                    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                        await faebot._handle_conversation(
+                            mock_message, conversation_id
+                        )
 
-                    # Check that response task was cleaned up
-                    assert conversation_id not in faebot.pending_responses
-                    mock_message.channel.send.assert_called_once_with("test response")
+                        # Check that response task was cleaned up
+                        assert conversation_id not in faebot.pending_responses
+                        mock_message.channel.send.assert_called_once_with(
+                            "test response"
+                        )
 
     def test_render_prompt_replaces_placeholders(self, faebot, mock_message):
         """Test that _render_prompt replaces placeholders with live context"""
@@ -462,3 +473,274 @@ class TestFaebot:
         result = faebot._resolve_discord_formatting(content, message)
 
         assert result == "@Ember look at this :sparkle: in the chat"
+
+    # --- Proxy message detection tests ---
+
+    def test_is_proxy_message_webhook(self, faebot):
+        """Test that webhook messages with bot=True are detected as proxies"""
+        message = Mock()
+        message.webhook_id = 123456789
+        message.author = Mock()
+        message.author.bot = True
+        assert faebot._is_proxy_message(message) is True
+
+    def test_is_proxy_message_normal(self, faebot):
+        """Test that normal user messages are not detected as proxies"""
+        message = Mock()
+        message.webhook_id = None
+        message.author = Mock()
+        message.author.bot = False
+        assert faebot._is_proxy_message(message) is False
+
+    def test_is_proxy_message_bot_no_webhook(self, faebot):
+        """Test that bot messages without webhook_id are not detected as proxies"""
+        message = Mock()
+        message.webhook_id = None
+        message.author = Mock()
+        message.author.bot = True
+        assert faebot._is_proxy_message(message) is False
+
+    # --- Content matching tests ---
+
+    def test_proxy_content_matches_exact(self, faebot):
+        """Test exact match (autoproxy case)"""
+        assert faebot._proxy_content_matches("hello world", "hello world") is True
+
+    def test_proxy_content_matches_substring(self, faebot):
+        """Test substring match (proxy tags stripped)"""
+        # Original has proxy tag "<" at end, proxy has it stripped
+        assert faebot._proxy_content_matches(
+            "how bout this brownie-dev! nyaa! <",
+            "how bout this brownie-dev! nyaa!"
+        ) is True
+
+    def test_proxy_content_matches_prefix_tags(self, faebot):
+        """Test substring match with prefix proxy tags"""
+        assert faebot._proxy_content_matches(
+            "[hello friends]",
+            "hello friends"
+        ) is True
+
+    def test_proxy_content_matches_too_short(self, faebot):
+        """Test that tiny substrings don't match (false positive guard)"""
+        assert faebot._proxy_content_matches(
+            "this is a long message about many things",
+            "this"
+        ) is False
+
+    def test_proxy_content_matches_unrelated(self, faebot):
+        """Test that unrelated content doesn't match"""
+        assert faebot._proxy_content_matches("hello world", "goodbye moon") is False
+
+    def test_proxy_content_matches_empty(self, faebot):
+        """Test that empty content doesn't match"""
+        assert faebot._proxy_content_matches("", "hello") is False
+        assert faebot._proxy_content_matches("hello", "") is False
+
+    # --- Recent message buffer tests ---
+
+    def test_buffer_recent_message(self, faebot):
+        """Test that messages are buffered and old ones pruned"""
+        faebot._buffer_recent_message("chan1", 111, "hello")
+        assert len(faebot.recent_messages["chan1"]) == 1
+        assert faebot.recent_messages["chan1"][0][1] == "hello"
+
+    def test_find_matching_original(self, faebot):
+        """Test finding a matching original for a proxy message"""
+        faebot._buffer_recent_message("chan1", 111, "hello world <")
+        result = faebot._find_matching_original("chan1", "hello world")
+        assert result is not None
+        assert result == (111, "hello world <")
+
+    def test_find_matching_original_no_match(self, faebot):
+        """Test that no match is returned for unrelated content"""
+        faebot._buffer_recent_message("chan1", 111, "hello world")
+        result = faebot._find_matching_original("chan1", "goodbye moon")
+        assert result is None
+
+    def test_find_matching_original_empty_buffer(self, faebot):
+        """Test that no match is returned for empty buffer"""
+        result = faebot._find_matching_original("chan1", "hello")
+        assert result is None
+
+    # --- History swap tests ---
+
+    def test_swap_history_for_proxy(self, faebot):
+        """Test that history entry is replaced with proxy version"""
+        conversation_id = "chan1"
+        faebot.conversations[conversation_id] = {
+            "conversation": [
+                "[2024-01-01 12:00:00] ambassador faeries: hello brownie-dev! <",
+            ],
+            "conversants": {},
+            "history_length": 20,
+        }
+        proxy_msg = Mock()
+        proxy_msg.author = Mock()
+        proxy_msg.author.display_name = "Ember | transfaeries"
+        proxy_msg.created_at = Mock()
+        proxy_msg.created_at.strftime.return_value = "2024-01-01 12:00:01"
+        proxy_msg.content = "hello brownie-dev!"
+        proxy_msg.mentions = []
+        proxy_msg.role_mentions = []
+        proxy_msg.channel_mentions = []
+
+        faebot._swap_history_for_proxy(
+            conversation_id,
+            "hello brownie-dev! <",
+            "ambassador faeries",
+            proxy_msg,
+        )
+
+        assert len(faebot.conversations[conversation_id]["conversation"]) == 1
+        assert "Ember | transfaeries" in faebot.conversations[conversation_id]["conversation"][0]
+        assert "hello brownie-dev!" in faebot.conversations[conversation_id]["conversation"][0]
+
+    # --- on_message proxy filter tests ---
+
+    @pytest.mark.asyncio
+    async def test_on_message_proxy_returns_early(self, faebot, mock_message):
+        """Test that proxy messages are caught by the early filter"""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {},
+            "conversation": [],
+            "history_length": 20,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+        # Set up as proxy message
+        mock_message.webhook_id = 999888777
+        mock_message.author.bot = True
+        mock_message.author.display_name = "Ember | transfaeries"
+        mock_message.content = "hello brownie-dev!"
+
+        # Buffer a matching original
+        faebot._buffer_recent_message(conversation_id, 111, "hello brownie-dev! <")
+        # Add matching history entry
+        faebot.conversations[conversation_id]["conversation"].append(
+            "[2024-01-01 12:00:00] ambassador faeries: hello brownie-dev! <"
+        )
+
+        with patch.object(
+            faebot, "_handle_conversation", new_callable=AsyncMock
+        ) as mock_handle:
+            await faebot.on_message(mock_message)
+            # Proxy should NOT reach _handle_conversation
+            mock_handle.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_on_message_proxy_signals_event(self, faebot, mock_message):
+        """Test that proxy message signals the waiting event"""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {},
+            "conversation": [],
+            "history_length": 20,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+        # Set up pending event
+        import asyncio
+
+        event = asyncio.Event()
+        faebot.proxy_pending[conversation_id] = event
+
+        # Set up as proxy message with matching original
+        mock_message.webhook_id = 999888777
+        mock_message.author.bot = True
+        mock_message.author.display_name = "Ember | transfaeries"
+        mock_message.content = "hello!"
+        faebot._buffer_recent_message(conversation_id, 111, "hello!")
+
+        await faebot.on_message(mock_message)
+
+        assert event.is_set()
+        assert conversation_id in faebot.proxy_recent
+        assert faebot.proxy_recent[conversation_id] == mock_message
+
+    # --- _handle_conversation proxy wait tests ---
+
+    @pytest.mark.asyncio
+    async def test_handle_conversation_no_proxy_timeout(self, faebot, mock_message):
+        """Test that _handle_conversation proceeds normally after proxy wait timeout"""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(faebot, "_generate_reply", return_value="test reply"):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                        await faebot._handle_conversation(
+                            mock_message, conversation_id
+                        )
+                        mock_message.channel.send.assert_called_once_with("test reply")
+
+        # Proxy state should be cleaned up
+        assert conversation_id not in faebot.proxy_pending
+
+    @pytest.mark.asyncio
+    async def test_handle_conversation_proxy_swap(self, faebot, mock_message):
+        """Test that _handle_conversation redirects to proxy message when one arrives"""
+        import asyncio
+
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
+            "conversation": [
+                "[2024-01-01 12:00:00] Test User: hello faebot! <"
+            ],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+        mock_message.content = "hello faebot! <"
+
+        # Create a proxy message
+        proxy_msg = Mock()
+        proxy_msg.webhook_id = 999888777
+        proxy_msg.author = Mock()
+        proxy_msg.author.bot = True
+        proxy_msg.author.display_name = "Ember | transfaeries"
+        proxy_msg.author.name = "Ember | transfaeries"
+        proxy_msg.content = "hello faebot!"
+        proxy_msg.channel = mock_message.channel
+        proxy_msg.created_at = Mock()
+        proxy_msg.created_at.strftime.return_value = "2024-01-01 12:00:01"
+        proxy_msg.mentions = []
+        proxy_msg.role_mentions = []
+        proxy_msg.channel_mentions = []
+        proxy_msg.reference = None
+        proxy_msg.guild = mock_message.guild
+        proxy_msg.id = 222222222222222222
+
+        # Pre-load the proxy message (simulating it arrived during the wait)
+        faebot.proxy_recent[conversation_id] = proxy_msg
+
+        # Make wait_for return immediately (proxy already there)
+        async def mock_wait_for(coro, timeout):
+            return await coro
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(faebot, "_generate_reply", return_value="hi ember!"):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for):
+                        await faebot._handle_conversation(
+                            mock_message, conversation_id
+                        )
+
+        mock_message.channel.send.assert_called_once_with("hi ember!")
