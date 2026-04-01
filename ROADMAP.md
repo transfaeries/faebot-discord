@@ -33,6 +33,7 @@
 - [x] PluralKit protocol — handle proxied messages (double-message dedup, wait-before-reply)
 
 ## Phase 5: Code Quality & Cleanup
+- [ ] Fix conversation save guard — allow clearing memory without blocking saves on restart
 - [ ] Move aiohttp to production dependencies
 - [ ] Remove unused replicate dependency
 - [ ] Audit log levels (info → debug where appropriate)
@@ -44,19 +45,14 @@
 - [ ] Extract commands as clean mixin (already partially done with admin_commands.py)
 - [ ] Align with Twitch bot refactor for eventual shared core
 - [ ] Event queue for generation status
-
-## Phase 6.5: Cross-Channel Awareness
-- [ ] Store guild_id in conversation dict for server grouping
-- [ ] At render time, include faebot's recent activity in sibling channels (same server)
-- [ ] Use bot_messages table — pull last faebot response + context per sibling channel
-- [ ] Stale conversations get a summary, active ones get recent messages
-- [ ] Gives faebot something to say in quiet channels by drawing on other conversations
+- [ ] Web dashboard — view active conversations, edit parameters (port from Twitch)
 
 ## Phase 7: Memory System (cross-project)
 - [ ] Per-user memory in DB (regulars, interests, past interactions)
 - [ ] Long-term persistent facts (channel history, faebot's own memories)
 - [ ] Shared memory layer with Twitch bot via PostgreSQL
 - [ ] Retrieval strategy: RAG vs summarization vs hybrid
+- [ ] Cross-channel awareness — faebot sees sibling channel activity on the same server
 
 ## Phase 8: Custom Faebot Model (cross-project)
 - [ ] Collect and curate training data from both platforms
@@ -64,7 +60,6 @@
 - [ ] Deploy via KoboldCPP for both Twitch and Discord
 
 ## Future Ideas
-- Web dashboard (port from Twitch)
 - Voice input for Discord voice channels
 - Reaction-based feedback loop for generation quality
 - Emoji tool — let faebot look up and use custom server emoji in responses
