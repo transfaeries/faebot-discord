@@ -263,13 +263,20 @@ class Faebot(discord.Client):
         match = self._find_matching_original(conversation_id, message.content)
         if match:
             _, original_content = match
+            # Resolve proxy content for history search — the buffer stores raw
+            # Discord content (e.g. <@id>) but history stores resolved text
+            # (e.g. @username). The proxy's resolved content matches what's in
+            # history since it's the same text (minus proxy tags).
+            resolved_content = self._resolve_discord_formatting(
+                message.content, message
+            )
             # Find the original author from the history entry we're about to swap
             # (we need the display name that was logged)
             original_author = None
             if conversation_id in self.conversations:
                 conv = self.conversations[conversation_id]["conversation"]
                 for entry in reversed(conv):
-                    if original_content in entry:
+                    if resolved_content in entry:
                         # Extract author from "[timestamp] Author: content" format
                         bracket_end = entry.find("] ")
                         if bracket_end != -1:
@@ -284,7 +291,7 @@ class Faebot(discord.Client):
 
             if original_author:
                 self._swap_history_for_proxy(
-                    conversation_id, original_content, original_author, message
+                    conversation_id, resolved_content, original_author, message
                 )
 
             # Track proxy author as conversant (display_name as both key and value)

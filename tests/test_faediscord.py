@@ -360,12 +360,16 @@ class TestFaebot:
             "model": "test-model",
         }
 
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()  # Clean up the unawaited coroutine
+            raise asyncio.TimeoutError
+
         with patch.object(faebot, "_should_respond_to_message", return_value=True):
             with patch.object(faebot, "_generate_reply", return_value="test response"):
                 with patch.object(
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
-                    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
                         await faebot._handle_conversation(mock_message, conversation_id)
 
                         # Check that response task was cleaned up
@@ -668,6 +672,63 @@ class TestFaebot:
         assert conversation_id in faebot.proxy_recent
         assert faebot.proxy_recent[conversation_id] == mock_message
 
+    @pytest.mark.asyncio
+    async def test_on_message_proxy_swaps_history_with_mentions(
+        self, faebot, mock_message
+    ):
+        """Test that proxy swap works when messages contain @mentions.
+
+        The buffer stores raw content (<@id>) but history stores resolved
+        content (@username). Option B fix: resolve proxy content before
+        searching history.
+        """
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {},
+            "conversation": [
+                "[2024-01-01 12:00:00] ambassador faeries: hey @brownie-dev what's up"
+            ],
+            "history_length": 20,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+
+        # Buffer stores raw content with Discord mention format
+        faebot._buffer_recent_message(
+            conversation_id, 111, "hey <@882358999830364212> what's up"
+        )
+
+        # Set up proxy message — PK strips tags but keeps mentions raw
+        mock_message.webhook_id = 999888777
+        mock_message.author.bot = True
+        mock_message.author.display_name = "Ember | transfaeries"
+        mock_message.content = "hey <@882358999830364212> what's up"
+        mock_message.created_at = Mock()
+        mock_message.created_at.strftime.return_value = "2024-01-01 12:00:01"
+
+        # Mock a mention so _resolve_discord_formatting resolves <@id> -> @name
+        mention_user = Mock()
+        mention_user.id = 882358999830364212
+        mention_user.display_name = "brownie-dev"
+        mock_message.mentions = [mention_user]
+        mock_message.role_mentions = []
+        mock_message.channel_mentions = []
+
+        with patch.object(
+            faebot, "_handle_conversation", new_callable=AsyncMock
+        ) as mock_handle:
+            await faebot.on_message(mock_message)
+            mock_handle.assert_not_called()
+
+        # History should be swapped to the proxy version
+        conv = faebot.conversations[conversation_id]["conversation"]
+        assert len(conv) == 1
+        assert "Ember | transfaeries" in conv[0]
+        assert "brownie-dev" in conv[0]
+        # Should NOT contain the raw mention format
+        assert "<@882358999830364212>" not in conv[0]
+
     # --- _handle_conversation proxy wait tests ---
 
     @pytest.mark.asyncio
@@ -683,12 +744,18 @@ class TestFaebot:
             "model": "test-model",
         }
 
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()  # Clean up the unawaited coroutine
+            raise asyncio.TimeoutError
+
         with patch.object(faebot, "_should_respond_to_message", return_value=True):
             with patch.object(faebot, "_generate_reply", return_value="test reply"):
                 with patch.object(
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
-                    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                    with patch(
+                        "asyncio.wait_for", side_effect=mock_wait_for_timeout
+                    ):
                         await faebot._handle_conversation(mock_message, conversation_id)
                         mock_message.channel.send.assert_called_once_with("test reply")
 
