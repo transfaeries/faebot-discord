@@ -673,18 +673,21 @@ class Faebot(discord.Client):
         model="google/gemini-2.0-flash-001",
         conversation_id=None,
     ) -> str:
-        """Generates AI-powered responses using OpenRouter API or local KoboldCPP with text completion"""
+        """Generates AI-powered responses using local KoboldCPP or OpenRouter API with text completion"""
 
         if not conversation_id or conversation_id not in self.conversations:
             return "Error: Invalid conversation context"
 
-        if self.debug_prompts:
-            logging.info("generating reply with model: " + model)
-            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
-
         # Check if we should use local model
         use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
         koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:6666")
+
+        if self.debug_prompts:
+            if use_local:
+                logging.info(f"generating reply with local KoboldCPP at {koboldcpp_url}")
+            else:
+                logging.info(f"generating reply with OpenRouter model: {model}")
+            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
 
         try:
             # Use aiohttp for async HTTP requests
@@ -701,10 +704,11 @@ class Faebot(discord.Client):
                 payload = {
                     "prompt": prompt,
                     "max_context_length": 4096,
-                    "max_length": 250,
+                    "max_length": 150,
                     "temperature": 0.7,
                     "top_p": 0.9,
-                    "rep_pen": 1.1,  # KoboldCPP uses rep_pen instead of frequency_penalty
+                    "rep_pen": 1.18,
+                    "rep_pen_range": 512,
                     "stop_sequence": ["[20", "\n\n\n"],
                 }
                 logging.info(f"✨ Using local KoboldCPP at {koboldcpp_url}")
