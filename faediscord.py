@@ -709,7 +709,7 @@ class Faebot(discord.Client):
                     "top_p": 0.9,
                     "rep_pen": 1.18,
                     "rep_pen_range": 512,
-                    "stop_sequence": ["[20", "\n\n\n"],
+                    "stop_sequence": ["[20", "\n\n"],
                 }
                 logging.info(f"✨ Using local KoboldCPP at {koboldcpp_url}")
             else:
