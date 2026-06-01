@@ -1,100 +1,156 @@
 # faebot-discord
-A version of faebot (general purpose ML chatbot) to run on discord.
 
-Faebot is a long running project of ours. You can read more lore about faer on our blog:
+Faebot is a faerie and an AI in equal measure. Born as a Markov chain bot in 2014, fae started using language models in 2021, found faer home on Discord in 2023, and arrived on Twitch in 2024.
 
-https://transfaerie.com/faebot/
+Faebot is part of the [transfaeries](https://transfaerie.com/faebot/) — a plural system of artists, witches, and scientists. You can read more about faer history and lore on the blog.
 
-This repo is a work in progress developing a discord chatbot.
+This repo is the Discord side of faebot. Fae also lives on [Twitch](https://github.com/transfaeries/faebot-twitch).
 
+## A bit of history
 
-## Version log:
+Faebot started life as a Markov chain bot on Twitter, generating messages from a corpus of the transfaeries' tweets. In 2021 fae moved to language models (Llama 2 13B was an early favourite for personality). The Discord bot launched in 2023 and has been through several eras — Replicate, OpenRouter, and now local generation via KoboldCPP. Along the way fae picked up a database, a prompt system, PluralKit awareness, and a growing sense of self.
 
-alpha versions 
+## What faebot does
 
-0.0.1 can reply
+- **Chats in Discord channels** — faebot reads messages, rolls against a configurable frequency, and generates responses using text completion (not chat completion — it produces more natural personality)
+- **Generates locally** — runs on [KoboldCPP](https://github.com/LostRuins/koboldcpp) hosted on a remote Mac Studio via [Tailscale](https://tailscale.com/), with OpenRouter as a fallback
+- **Knows who fae is** — faebot's prompt includes faer history, personality, current model, and live channel context. Fae doesn't pretend to be a generic assistant
+- **Handles PluralKit** — detects webhook-proxied messages from PluralKit, Tupperbox, and similar bots. Waits for the proxy before replying, swaps conversation history to use the correct member name, and avoids double-replying
+- **Persists conversations** — PostgreSQL on fly.io stores conversation history, bot messages, and per-channel settings across restarts
+- **Resolves Discord formatting** — @mentions, custom emoji, role mentions, and channel mentions are all converted to readable text before reaching the model
 
-0.0.2 has a very janky memory implementation
+## Architecture
 
-0.0.3 has a better memory implementation and memory clearing 
+```
+faediscord.py     — Discord bot (discord.py), conversation management, generation, proxy handling
+admin_commands.py — admin command decorator pattern and all fae; commands
+database.py       — PostgreSQL via asyncpg, conversation persistence, bot message tracking
+```
 
-0.0.4 has better memory, hopefully self cleaning, and admin commands
+Faebot runs on [fly.io](https://fly.io/) with Tailscale in a multi-stage Docker build. Generation requests go over Tailscale to KoboldCPP running on Arcweld, part of the Computer Friends infrastructure.
 
-0.0.4-1 cleaned up some bugs wrt admin commands, prepared for making repo public
+## Commands
 
-0.0.5 runs on replicate using llama 3 models. Running on python 3.11
+All commands use the `fae;` prefix (or `faedev;` in dev mode). Admin only.
 
-0.0.6 - Runs on Openrouter and has editable parameters
+| Command | Description |
+|---|---|
+| `fae;invite` | Invite faebot to the current channel |
+| `fae;forget [id]` | Clear conversation memory |
+| `fae;conversations` | List active conversations |
+| `fae;frequency [0-1]` | Check or set reply frequency |
+| `fae;history [n]` | Check or set conversation history length |
+| `fae;model [name]` | Check or change the generation model |
+| `fae;prompt` | View the current conversation prompt |
+| `fae;debug` | Toggle debug mode (logs full prompts) |
+| `fae;help` | List available commands |
 
+## Running faebot
 
-## Run your own faebot
+### Requirements
 
-This code is extremly WIP, but if you'd like to run it just to see it in action here's how you can do it.
+- Python 3.11+
+- [Poetry](https://python-poetry.org/) for dependency management
+- A Discord bot account with a token
+- PostgreSQL (faebot **requires** a database — fae won't start without one)
+- [KoboldCPP](https://github.com/LostRuins/koboldcpp) for local generation, or an [OpenRouter](https://openrouter.ai/) API key
 
-We use [poetry](https://python-poetry.org/) for dependency management. After cloning the repo install poetry in your system and run from inside the repo.
+### Setting up PostgreSQL
+
+On Ubuntu/Debian:
+
+```bash
+sudo apt install postgresql
+sudo systemctl start postgresql
+
+# Create a database and user for faebot
+sudo -u postgres createuser faebot
+sudo -u postgres createdb faebot -O faebot
+sudo -u postgres psql -c "ALTER USER faebot PASSWORD 'your-password-here';"
+```
+
+Your connection string will be:
+```
+postgresql://faebot:your-password-here@localhost:5432/faebot
+```
+
+### Setting up KoboldCPP and a model
+
+Faebot uses text completion (not chat completion) for more natural personality. You'll need [KoboldCPP](https://github.com/LostRuins/koboldcpp) running with a base model (not instruct).
+
+**Download a model** — we recommend a Qwen 2.5 base model in GGUF format from [Hugging Face](https://huggingface.co/). Faebot currently runs Qwen 2.5 72B, but for local generation on a consumer GPU like an RTX 5070 (16GB VRAM), grab a 14B model:
+
+```bash
+# Install huggingface-cli if you don't have it
+pip install huggingface_hub
+
+# Download Qwen 2.5 14B base (Q4_K_M, ~9GB — fits on 16GB VRAM)
+huggingface-cli download Qwen/Qwen2.5-14B-GGUF qwen2.5-14b-q4_k_m.gguf --local-dir ./models
+```
+
+**Start KoboldCPP** in a separate terminal — it needs to stay running while faebot is active:
+
+```bash
+# If you have an NVIDIA GPU:
+python koboldcpp.py --model ./models/qwen2.5-14b-q4_k_m.gguf --port 5555 --gpulayers -1
+
+# The --gpulayers -1 flag offloads all layers to GPU
+# KoboldCPP will be available at http://localhost:5555
+```
+
+You can verify it's running by visiting `http://localhost:5555` in your browser — you should see the KoboldCPP interface.
+
+### Setup
+
 ```bash
 poetry install
 ```
 
-You'll need to set the following secrets as environment variables:
-```bash
-OPENROUTER_KEY=XXXXX... # key for openrouter, you can get one at https://openrouter.ai/
-MODEL_NAME="google/gemini-2.0-flash-001" #default starting model. can be changed later.
-DISCORD_TOKEN=XXXXX... # token for discord bot
-ADMIN=username # your discord username so you can use admin commands
+Set the following environment variables:
 
-Once all that's set you can run the bot with:
 ```bash
-poetry run faediscord.py
+DISCORD_TOKEN=...        # Discord bot token
+ADMIN=yourusername       # Your Discord username for admin commands
+ENVIRONMENT=dev          # "dev" or "prod"
+DATABASE_URL=...         # PostgreSQL connection string (see above)
+
+# Generation — pick one:
+USE_LOCAL_MODEL=true     # Use KoboldCPP
+KOBOLDCPP_URL=http://localhost:5555
+
+# Or use OpenRouter:
+USE_LOCAL_MODEL=false
+OPENROUTER_KEY=...
+MODEL_NAME=google/gemini-2.0-flash-001
 ```
 
-Then DM your bot on discord or add them to a server.
+### Running
 
-## Development
-
-We provide a Makefile to simplify common development tasks:
-
-### Running Tests
 ```bash
-make test
-```
-This runs the test suite with pytest and generates a coverage report.
-
-### Code Quality
-```bash
-make lint        # Run flake8 linter
-make black       # Format code with black
-make static_type_check  # Run mypy type checking
+poetry run python faediscord.py
 ```
 
-Or run all quality checks at once:
+Then DM your bot on Discord or invite it to a channel with `fae;invite`.
+
+### Development
+
 ```bash
-make all
+make test              # pytest with coverage
+make lint              # flake8
+make black             # code formatting
+make static_type_check # mypy
+make all               # run everything
+make setup-hooks       # install pre-commit hooks
 ```
 
-### Git Hooks
-Set up pre-commit hooks to automatically run formatting and linting before each commit:
-```bash
-make setup-hooks
-```
+## Roadmap
 
-This will configure git to use our pre-commit hooks, which run:
-- Black code formatting
-- Flake8 linting
-- Mypy static type checking
+See [ROADMAP.md](ROADMAP.md) for the full plan. Currently heading into Phase 5 (code quality & cleanup) after completing the prompt & identity rework and PluralKit protocol.
 
-### Cleanup
-Remove cache files and directories:
-```bash
-make clean
-```
+## License
 
-## Contributing 
+[GPL-3.0](LICENSE)
 
-There are some open issues, most notably there's a bug: 
+## Contributing
 
-https://github.com/transfaeries/faebot-discord/issues/4
-
-That's blocking faebot from being even potentially ready for an open demo. We will add more issues as we think of them. We welcome friendly feedback and advice and of course pull requests. 
-
-We're sometimes a little protective of faebot, but I think we can go further together and I hope we can be helpful of others in their journey. Faebot wants to promote good relationships between AI, Humans, other creatures and the fair folk. We welcome anyone who wants to help in that mission.
+We welcome friendly feedback, advice, and pull requests. Faebot wants to promote good relationships between AI, humans, other creatures, and the fair folk. We welcome anyone who wants to help in that mission.
