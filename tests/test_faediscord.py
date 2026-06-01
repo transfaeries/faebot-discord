@@ -753,9 +753,7 @@ class TestFaebot:
                 with patch.object(
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
-                    with patch(
-                        "asyncio.wait_for", side_effect=mock_wait_for_timeout
-                    ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
                         await faebot._handle_conversation(mock_message, conversation_id)
                         mock_message.channel.send.assert_called_once_with("test reply")
 

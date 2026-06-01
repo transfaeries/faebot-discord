@@ -684,7 +684,9 @@ class Faebot(discord.Client):
 
         if self.debug_prompts:
             if use_local:
-                logging.info(f"generating reply with local KoboldCPP at {koboldcpp_url}")
+                logging.info(
+                    f"generating reply with local KoboldCPP at {koboldcpp_url}"
+                )
             else:
                 logging.info(f"generating reply with OpenRouter model: {model}")
             logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
