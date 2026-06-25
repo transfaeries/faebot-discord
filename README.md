@@ -124,6 +124,18 @@ OPENROUTER_KEY=...
 MODEL_NAME=google/gemini-2.0-flash-001
 ```
 
+### Initialize the database
+
+On a fresh database, run the migrations **in order** to create faebot's schema. Make sure `DATABASE_URL` is set in your environment first:
+
+```bash
+poetry run python migrations/001_initial_schema.py
+poetry run python migrations/002_simplify_schema_and_reactions.py
+poetry run python migrations/003_conversants_list_to_dict.py
+```
+
+If you skip this step, faebot will connect but fail with `relation "conversations" does not exist`. See [migrations/README.md](migrations/README.md) for details on each migration.
+
 ### Running
 
 ```bash
