@@ -11,6 +11,7 @@ import discord
 import aiohttp
 from database import FaebotDatabase
 from admin_commands import admin_commands
+import capture
 import time
 
 
@@ -89,6 +90,10 @@ class Faebot(discord.Client):
         self.debug_prompts = env == "dev"  # Store debug state in the bot instance
         self.fdb = FaebotDatabase()
 
+        # Spike-01 capture tap: raw-event recording to captured_events, opt-in
+        # via SPIKE_CAPTURE. Capture-only — nothing it records feeds the prompt.
+        capture.init(self.fdb)
+
         # Add queue for handling concurrent requests
         self.pending_responses: Dict[str, asyncio.Task] = {}
         self.session: Optional[aiohttp.ClientSession] = None
@@ -101,7 +106,9 @@ class Faebot(discord.Client):
         self.proxy_recent: Dict[str, discord.Message] = {}
         self.recent_messages: Dict[str, List[Tuple[int, str, float]]] = {}
 
-        super().__init__(intents=intents)
+        # enable_debug_events lets the capture tap see raw gateway frames
+        # (on_socket_raw_receive); harmless no-op when capture is off.
+        super().__init__(intents=intents, enable_debug_events=capture.RAW_ENABLED)
 
     def _render_prompt(self, template_name, message, conversation_id):
         """Render a prompt template with live context from the message."""
@@ -243,7 +250,43 @@ class Faebot(discord.Client):
         self.conversations = await self.fdb.load_conversations()
 
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        # Loud capture status so a preflight glance at the logs settles it
+        # (the SPIKE_CAPTURE_DIR silent-no-op lesson from the Twitch tap).
+        if capture.is_enabled():
+            logging.info("🎥 CAPTURE ON — recording raw events to captured_events")
+        else:
+            logging.info("capture off (SPIKE_CAPTURE not set)")
         logging.info("------")
+
+    # --- spike-01 capture delegates -------------------------------------------
+    # Thin pass-throughs to capture.py: record raw surface events for offline
+    # transduction. Capture-only — none of this feeds the live bot's prompt.
+
+    async def on_raw_message_edit(self, payload):
+        capture.record_message_edit(payload)
+
+    async def on_raw_message_delete(self, payload):
+        capture.record_message_delete(payload)
+
+    async def on_raw_reaction_add(self, payload):
+        capture.record_reaction(payload, "reaction_add")
+
+    async def on_raw_reaction_remove(self, payload):
+        capture.record_reaction(payload, "reaction_remove")
+
+    async def on_typing(self, channel, user, when):
+        capture.record_typing(channel, user, when)
+
+    async def on_member_join(self, member):
+        capture.record_member(member, "member_join")
+
+    async def on_member_remove(self, member):
+        capture.record_member(member, "member_remove")
+
+    async def on_socket_raw_receive(self, frame):
+        capture.record_socket_raw(frame)
+
+    # ---------------------------------------------------------------------------
 
     async def _handle_proxy_message(self, message, conversation_id):
         """Handle a webhook-proxied message (PluralKit, Tupperbox, etc.).
@@ -335,6 +378,10 @@ class Faebot(discord.Client):
 
     async def on_message(self, message):
         """Handles what happens when the bot receives a message"""
+        # Capture tap FIRST — before the self-check and all filtering, so the
+        # raw log keeps faebot's own echo, proxy webhooks, and dotted messages.
+        capture.record_message(message)
+
         # don't respond to ourselves
         if message.author == self.user:
             return
@@ -582,6 +629,18 @@ class Faebot(discord.Client):
 
             # Get last 5 messages as context (excluding the bot's new reply)
             context = self.conversations[conversation_id]["conversation"][-6:-1]
+
+            # Capture faer own reply WITH internal metadata (prompt/model/context)
+            # — the send point is the only place this view exists; the gateway
+            # echo of the same message is captured separately in on_message.
+            capture.record_faebot_message(
+                sent_message,
+                conversation_id=conversation_id,
+                prompt=prompt,
+                model=self.conversations[conversation_id]["model"],
+                context=context,
+            )
+
             if not await self.fdb.save_bot_message(
                 conversation_id=conversation_id,
                 content=reply,
@@ -844,6 +903,9 @@ class Faebot(discord.Client):
 # intents for the discordbot
 intents = discord.Intents.default()
 intents.message_content = True
+# members (privileged; already enabled in the dev portal) lets the capture tap
+# record member join/leave — the live bot itself doesn't use member events.
+intents.members = True
 
 # instantiate and run the bot
 if __name__ == "__main__":
