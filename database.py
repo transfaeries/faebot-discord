@@ -419,6 +419,29 @@ class FaebotDatabase:
             # Return empty dict - bot will start fresh but won't crash
             return {}
 
+    @with_retry()
+    async def save_captured_event(self, kind: str, captured_at, payload_json: str):
+        """Append one raw event to captured_events (the spike-01 capture tap).
+
+        Append-only, never updated; capture.py swallows any failure so this can
+        never disturb the bot. payload_json is already-serialized JSON.
+        """
+        if not self.pool:
+            logging.debug("No database pool - cannot save captured event")
+            return False
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO captured_events (captured_at, kind, payload)
+                VALUES ($1, $2, $3::jsonb)
+                """,
+                captured_at,
+                kind,
+                payload_json,
+            )
+            return True
+
     async def update_reactions(self, message_id: str, reactions: Dict[str, int]):
         """Update reactions on a bot message (for future use)"""
         if not self.pool:
