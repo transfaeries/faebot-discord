@@ -33,6 +33,12 @@ async def migrate():
     conn = await asyncpg.connect(database_url)
 
     try:
+        # Announce the target BEFORE acting — DATABASE_URL is trusted blindly,
+        # and a mis-sourced environment once pointed a migration at the wrong
+        # database (2026-07-06). Make the blast zone legible.
+        target = await conn.fetchrow("SELECT current_user AS usr, current_database() AS db")
+        logging.info(f"Target: {target['usr']} @ {target['db']}")
+
         exists = await conn.fetchval(
             """
             SELECT EXISTS (
