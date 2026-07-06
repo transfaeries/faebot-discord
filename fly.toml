@@ -7,7 +7,7 @@ processes = []
 
 [env]
   ENVIRONMENT = "prod"
-  USE_LOCAL_MODEL = "true"
+  USE_LOCAL_MODEL = "false"
 
 
 [experimental]
