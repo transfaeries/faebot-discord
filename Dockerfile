@@ -19,5 +19,4 @@ COPY --from=libbuilder /app/venv/lib/python3.13/site-packages /app/
 # Copy application code
 COPY . /app/
 
-WORKDIR /app
 CMD ["/usr/bin/python3.13", "/app/faediscord.py"]
