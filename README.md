@@ -13,7 +13,7 @@ Faebot started life as a Markov chain bot on Twitter, generating messages from a
 ## What faebot does
 
 - **Chats in Discord channels** — faebot reads messages, rolls against a configurable frequency, and generates responses using text completion (not chat completion — it produces more natural personality)
-- **Generates locally** — runs on [KoboldCPP](https://github.com/LostRuins/koboldcpp) hosted on a remote Mac Studio via [Tailscale](https://tailscale.com/), with OpenRouter as a fallback
+- **Generates via [OpenRouter](https://openrouter.ai/)** — a local [KoboldCPP](https://github.com/LostRuins/koboldcpp) path is retained (env-gated, currently dormant) for the future dedicated-machine era
 - **Knows who fae is** — faebot's prompt includes faer history, personality, current model, and live channel context. Fae doesn't pretend to be a generic assistant
 - **Handles PluralKit** — detects webhook-proxied messages from PluralKit, Tupperbox, and similar bots. Waits for the proxy before replying, swaps conversation history to use the correct member name, and avoids double-replying
 - **Persists conversations** — PostgreSQL on fly.io stores conversation history, bot messages, and per-channel settings across restarts
@@ -27,7 +27,7 @@ admin_commands.py — admin command decorator pattern and all fae; commands
 database.py       — PostgreSQL via asyncpg, conversation persistence, bot message tracking
 ```
 
-Faebot runs on [fly.io](https://fly.io/) with Tailscale in a multi-stage Docker build. Generation requests go over Tailscale to KoboldCPP running on Arcweld, part of the Computer Friends infrastructure.
+Faebot runs on [fly.io](https://fly.io/) in a multi-stage Docker build. Generation requests go to OpenRouter over HTTPS. (The Tailscale-to-Arcweld KoboldCPP route was removed 2026-07 — the env-gated local-model path remains in code for the future dedicated-machine era.)
 
 ## Commands
 
