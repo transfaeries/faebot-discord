@@ -8,6 +8,10 @@ processes = []
 [env]
   ENVIRONMENT = "prod"
   USE_LOCAL_MODEL = "false"
+  # Capture is default-on (how faebot perceives). Set truthy ("1"/"true") to
+  # kill raw-event recording without a code change; CAPTURE_RAW = "0" would
+  # disable just the gateway-frame catch-all. See capture.py.
+  CAPTURE_DISABLED = "false"
 
 
 [experimental]

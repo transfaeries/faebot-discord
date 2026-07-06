@@ -26,7 +26,6 @@ class TestFaebot:
             # Mock the database to avoid actual database calls
             bot.fdb = Mock()
             bot.fdb.save_conversation = AsyncMock(return_value=True)
-            bot.fdb.save_bot_message = AsyncMock(return_value=True)
             bot.fdb.get_conversation = AsyncMock(return_value=None)
             bot.fdb.connect = AsyncMock(return_value=True)
             bot.fdb.close = AsyncMock(return_value=True)

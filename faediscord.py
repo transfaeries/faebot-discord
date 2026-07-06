@@ -90,8 +90,9 @@ class Faebot(discord.Client):
         self.debug_prompts = env == "dev"  # Store debug state in the bot instance
         self.fdb = FaebotDatabase()
 
-        # Spike-01 capture tap: raw-event recording to captured_events, opt-in
-        # via SPIKE_CAPTURE. Capture-only — nothing it records feeds the prompt.
+        # Capture tap: raw-event recording to captured_events, default-on
+        # (CAPTURE_DISABLED is the kill switch). Capture-only — nothing it
+        # records feeds the prompt.
         capture.init(self.fdb)
 
         # Add queue for handling concurrent requests
@@ -251,11 +252,11 @@ class Faebot(discord.Client):
 
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         # Loud capture status so a preflight glance at the logs settles it
-        # (the SPIKE_CAPTURE_DIR silent-no-op lesson from the Twitch tap).
+        # (the silent-no-op lesson from the Twitch tap).
         if capture.is_enabled():
             logging.info("🎥 CAPTURE ON — recording raw events to captured_events")
         else:
-            logging.info("capture off (SPIKE_CAPTURE not set)")
+            logging.warning("⚠️ capture OFF (CAPTURE_DISABLED is set — faebot is not recording)")
         logging.info("------")
 
     # --- spike-01 capture delegates -------------------------------------------
@@ -641,15 +642,7 @@ class Faebot(discord.Client):
                 context=context,
             )
 
-            if not await self.fdb.save_bot_message(
-                conversation_id=conversation_id,
-                content=reply,
-                context=context,
-                message_id=str(sent_message.id) if sent_message else None,
-            ):
-                logging.warning(f"Failed to save bot message for {conversation_id}")
-
-            # Also save the updated conversation state
+            # Save the updated conversation state
             if not await self.fdb.save_conversation(
                 conversation_id, self.conversations[conversation_id]
             ):

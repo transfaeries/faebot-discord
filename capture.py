@@ -1,6 +1,6 @@
-"""Spike 01 (faebot-core) — Discord capture tap.
+"""Discord capture tap (born in faebot-core spike 01; graduated 2026-07-06).
 
-A *thin, faithful, opt-in, maximalist* recorder that appends raw Discord events
+A *thin, faithful, default-on, maximalist* recorder that appends raw Discord events
 to the `captured_events` Postgres table so we can transduce them into faebot-core
 `Observation`s offline (in faebot-private/snippets/discord/). It is the sibling of
 faebot-twitch's capture tap and the in-process successor to the standalone
@@ -8,10 +8,12 @@ spike01_listener: record everything the surface gives us, reason about none of i
 here — reconciliation is faebot's cognition, not the adapter's.
 
 Design rules (load-bearing — this runs inside the LIVE bot on fly):
-  * **Opt-in.** Capture happens only when SPIKE_CAPTURE is set (any non-empty
-    value). Unset = every function is a no-op, so the live bot is completely
-    unaffected unless we deliberately turn it on. SPIKE_CAPTURE_RAW=0 additionally
-    disables the raw gateway-frame catch-all if its volume gets silly.
+  * **Default-on, kill-switchable.** Capture is how faebot perceives — it runs
+    unless CAPTURE_DISABLED is set truthy ("1"/"true"/"yes"), the redeploy-free
+    kill switch if it ever misbehaves. ""/"0"/"false"/"no"/unset all mean
+    capture ON (so a documented default in fly.toml can't foot-gun).
+    CAPTURE_RAW=0 additionally disables just the raw gateway-frame catch-all
+    if its volume gets silly.
   * **Never breaks the bot.** Every extraction + write is wrapped; failures are
     swallowed and logged at debug. Writes are fired as background tasks so a slow
     or dormant database can never delay faebot's reply path.
@@ -35,8 +37,9 @@ import os
 from typing import Any, Dict, Optional
 
 
-CAPTURE_ENABLED = bool(os.getenv("SPIKE_CAPTURE", ""))
-RAW_ENABLED = CAPTURE_ENABLED and os.getenv("SPIKE_CAPTURE_RAW", "1") != "0"
+# Default-on: only an explicitly truthy CAPTURE_DISABLED turns capture off.
+CAPTURE_ENABLED = os.getenv("CAPTURE_DISABLED", "").strip().lower() in ("", "0", "false", "no")
+RAW_ENABLED = CAPTURE_ENABLED and os.getenv("CAPTURE_RAW", "1") != "0"
 
 # The database handle is injected at startup (see init) to avoid a circular import.
 _database: Optional[Any] = None

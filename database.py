@@ -3,7 +3,7 @@ import asyncio
 import os
 import logging
 import json
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from functools import wraps
 
 env = os.getenv("ENVIRONMENT", "dev").lower()
@@ -293,44 +293,6 @@ class FaebotDatabase:
             raise
 
     @with_retry()
-    async def save_bot_message(
-        self,
-        conversation_id: str,
-        content: str,
-        context: List[str],
-        message_id: Optional[str] = None,
-    ):
-        """Save a bot message with its context"""
-        if not self.pool:
-            logging.warning("No database pool - cannot save bot message")
-            return False
-
-        try:
-            async with self.pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO bot_messages (
-                        conversation_id, message_id, content, context
-                    ) VALUES ($1, $2, $3, $4)
-                    """,
-                    conversation_id,
-                    message_id,
-                    content,
-                    json.dumps(context),
-                )
-                logging.info(
-                    f"✅ Saved bot message to database: {conversation_id} - {content[:50]}..."
-                )
-                return True
-
-        except (TypeError, ValueError) as e:  # JSON encoding errors
-            logging.error(f"Failed to encode context as JSON: {e}")
-            return False
-        except Exception as e:
-            logging.error(f"Failed to save bot message for {conversation_id}: {e}")
-            raise
-
-    @with_retry()
     async def load_conversations(self) -> Dict[str, Dict[str, Any]]:
         """Load all conversations from the database"""
         if not self.pool:
@@ -441,19 +403,3 @@ class FaebotDatabase:
                 payload_json,
             )
             return True
-
-    async def update_reactions(self, message_id: str, reactions: Dict[str, int]):
-        """Update reactions on a bot message (for future use)"""
-        if not self.pool:
-            return
-
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE bot_messages
-                SET reactions = $1
-                WHERE message_id = $2
-            """,
-                json.dumps(reactions),
-                message_id,
-            )
