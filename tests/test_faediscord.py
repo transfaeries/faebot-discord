@@ -30,6 +30,7 @@ class TestFaebot:
             bot.fdb.get_conversation = AsyncMock(return_value=None)
             bot.fdb.connect = AsyncMock(return_value=True)
             bot.fdb.close = AsyncMock(return_value=True)
+            bot.fdb.assert_environment = AsyncMock(return_value=None)
             bot.fdb.load_conversations = AsyncMock(return_value={})
 
             # Settings-split: the bot pulls the four dials from channel_settings

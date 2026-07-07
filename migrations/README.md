@@ -8,6 +8,7 @@ Run migrations **in order** on a fresh database:
 - `004_captured_events.py` — Creates the append-only `captured_events` raw event log for the capture tap (see `capture.py`; no-op if it already exists)
 - `005_drop_bot_messages.py` — Drops the `bot_messages` table (superseded by `captured_events`; take a backup dump first — no-op once dropped)
 - `006_channel_settings.py` — Creates the typed `channel_settings` table (the settings-split) and seeds the `__default__` / `__default_dm__` policy rows. Channel-specific overrides are environment data — applied manually, never in the migration.
+- `007_environment_meta.py` — Creates the `meta` table and stamps the database's environment (`dev`/`prod`). The bot asserts a match at startup and refuses to run against a mismatched database; this migration refuses to re-stamp a database already marked as a different environment.
 
 To run each:
 
@@ -18,6 +19,7 @@ poetry run python migrations/003_conversants_list_to_dict.py
 poetry run python migrations/004_captured_events.py
 poetry run python migrations/005_drop_bot_messages.py
 poetry run python migrations/006_channel_settings.py --env dev   # or --env prod
+poetry run python migrations/007_environment_meta.py --env dev    # or --env prod
 ```
 
 > **From 006 onward**, migrations require an explicit `--env dev|prod` flag and

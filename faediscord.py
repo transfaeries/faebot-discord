@@ -263,6 +263,10 @@ class Faebot(discord.Client):
         # Initialize database connection
         await self.fdb.connect()
 
+        # Refuse to run against a database stamped for a different environment
+        # (the meta guard — catches wrong-DB no matter how the URL got here).
+        await self.fdb.assert_environment(env)
+
         # Load existing conversations from database
         self.conversations = await self.fdb.load_conversations()
 

@@ -355,6 +355,31 @@ class FaebotDatabase:
             # Return empty dict - bot will start fresh but won't crash
             return {}
 
+    async def assert_environment(self, expected: str):
+        """Refuse to run against a database stamped for a different environment.
+
+        The startup half of the meta guard (migration 007). Graceful during
+        rollout: a database without the meta table (pre-007) only warns, so
+        nothing breaks before 007 has run everywhere.
+        """
+        if not self.pool:
+            logging.warning("No database pool — cannot verify environment")
+            return
+        async with self.pool.acquire() as conn:
+            has_meta = await conn.fetchval("SELECT to_regclass('public.meta')")
+            if not has_meta:
+                logging.warning(
+                    "meta table absent — cannot verify environment (run migration 007)"
+                )
+                return
+            stamped = await conn.fetchval("SELECT environment FROM meta WHERE id = 1")
+        if stamped != expected:
+            raise RuntimeError(
+                f"❌ ENVIRONMENT MISMATCH: database is stamped '{stamped}' but the bot's "
+                f"ENVIRONMENT is '{expected}'. Refusing to start — wrong database?"
+            )
+        logging.info(f"✅ Environment verified: connected database is '{expected}'")
+
     @with_retry()
     async def get_effective_settings(
         self, conversation_id: str, is_dm: bool = False
