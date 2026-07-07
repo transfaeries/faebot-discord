@@ -7,6 +7,7 @@ Run migrations **in order** on a fresh database:
 - `003_conversants_list_to_dict.py` — Converts the `conversants` field from list to dict format (no-op on a fresh database)
 - `004_captured_events.py` — Creates the append-only `captured_events` raw event log for the capture tap (see `capture.py`; no-op if it already exists)
 - `005_drop_bot_messages.py` — Drops the `bot_messages` table (superseded by `captured_events`; take a backup dump first — no-op once dropped)
+- `006_channel_settings.py` — Creates the typed `channel_settings` table (the settings-split) and seeds the `__default__` / `__default_dm__` policy rows. Channel-specific overrides are environment data — applied manually, never in the migration.
 
 To run each:
 
@@ -16,6 +17,7 @@ poetry run python migrations/002_simplify_schema_and_reactions.py
 poetry run python migrations/003_conversants_list_to_dict.py
 poetry run python migrations/004_captured_events.py
 poetry run python migrations/005_drop_bot_messages.py
+poetry run python migrations/006_channel_settings.py
 ```
 
 > **Note:** `001` must run before `002` even though `002` rebuilds the schema — `002` performs a safety check (`SELECT COUNT(*) FROM conversations`) before dropping tables, which requires the `conversations` table created by `001` to exist.
