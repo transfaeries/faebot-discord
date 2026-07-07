@@ -25,20 +25,44 @@ Additive and idempotent — safe before the code that reads it deploys;
 ON CONFLICT DO NOTHING so re-runs never clobber edited defaults.
 """
 
+import argparse
 import asyncio
 import asyncpg
 import os
 import logging
+import sys
 
 logging.basicConfig(level=logging.INFO)
 
 
-async def migrate():
-    database_url = os.getenv("DATABASE_URL")
+def resolve_database_url() -> str:
+    """Require an explicit --env; read the matching explicit variable.
+
+    The stale-shell disarm (2026-07-07): migrations no longer read ambient
+    DATABASE_URL — you must SAY which world you mean, and the variable name
+    matches the secrets file that provides it (dev_discord_secrets.fish /
+    prod_discord_secrets.fish). Pattern for all migrations from 006 onward.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env", required=True, choices=["dev", "prod"],
+                        help="which database this migration targets")
+    arguments = parser.parse_args()
+
+    variable = "PROD_DATABASE_URL" if arguments.env == "prod" else "DEV_DATABASE_URL"
+    database_url = os.getenv(variable, "")
+    if not database_url:
+        sys.exit(f"{variable} is not set — source ../secrets/{arguments.env}_discord_secrets.fish first")
+    logging.info(f"Requested environment: {arguments.env} (via {variable})")
+
     if "localhost:5432" in database_url:
         database_url += (
             "?sslmode=disable" if "?" not in database_url else "&sslmode=disable"
         )
+    return database_url
+
+
+async def migrate():
+    database_url = resolve_database_url()
 
     logging.info("Connecting to database...")
     conn = await asyncpg.connect(database_url)

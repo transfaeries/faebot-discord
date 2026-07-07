@@ -17,8 +17,15 @@ poetry run python migrations/002_simplify_schema_and_reactions.py
 poetry run python migrations/003_conversants_list_to_dict.py
 poetry run python migrations/004_captured_events.py
 poetry run python migrations/005_drop_bot_messages.py
-poetry run python migrations/006_channel_settings.py
+poetry run python migrations/006_channel_settings.py --env dev   # or --env prod
 ```
+
+> **From 006 onward**, migrations require an explicit `--env dev|prod` flag and
+> read `DEV_DATABASE_URL` / `PROD_DATABASE_URL` (never ambient `DATABASE_URL`) —
+> the variable name matches the secrets file that provides it. They also
+> announce `current_user @ current_database` before acting. Both habits exist
+> because a stale-sourced shell once pointed a migration at the wrong database
+> (2026-07-06).
 
 > **Note:** `001` must run before `002` even though `002` rebuilds the schema — `002` performs a safety check (`SELECT COUNT(*) FROM conversations`) before dropping tables, which requires the `conversations` table created by `001` to exist.
 

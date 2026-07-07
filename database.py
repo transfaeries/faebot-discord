@@ -91,7 +91,12 @@ def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
 class FaebotDatabase:
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
-        self.database_url = os.getenv("DATABASE_URL", "")
+        # The environment picks WHICH variable to read (the stale-shell
+        # disarm, 2026-07-07): prod reads DATABASE_URL as fly injects it;
+        # dev reads DEV_DATABASE_URL, so a shell polluted with prod secrets
+        # cannot silently hand the dev bot the production database.
+        url_variable = "DATABASE_URL" if env == "prod" else "DEV_DATABASE_URL"
+        self.database_url = os.getenv(url_variable, "")
 
         # Add sslmode=disable for local proxy
         if self.database_url and "localhost:5432" in self.database_url:
