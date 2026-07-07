@@ -28,6 +28,8 @@ class TestAdminCommands:
         bot.conversations = {}
         bot.debug_prompts = False
         bot.conversation = []  # Add this for the forget tests
+        # Settings setters write through to channel_settings (async).
+        bot.fdb.set_channel_setting = AsyncMock(return_value=True)
         return bot
 
     @pytest.fixture
@@ -329,8 +331,32 @@ class TestAdminCommands:
         assert mock_bot.conversations[conversation_id]["history_length"] == int(
             new_length
         )
+        mock_bot.fdb.set_channel_setting.assert_awaited_once_with(
+            conversation_id, "history_length", int(new_length)
+        )
         mock_message.channel.send.assert_called_once_with(
             f"History length set to: {new_length} for conversation {conversation_id}"
+        )
+
+    @pytest.mark.asyncio
+    @patch("admin_commands.admin", "test_admin")
+    async def test_set_history_length_for_specific_conversation(
+        self, setup_test_conversation, mock_message
+    ):
+        """Regression: `history <conversation_id> <length>` must set the LENGTH,
+        not parse the snowflake conversation id as the length (the old bug)."""
+        mock_bot = setup_test_conversation
+        target_id = "789012"
+        new_length = "30"
+        mock_message.content = f"{COMMAND_PREFIX}history {target_id} {new_length}"
+
+        await _set_history_length(
+            mock_bot, mock_message, ["history", target_id, new_length], "123456"
+        )
+
+        assert mock_bot.conversations[target_id]["history_length"] == 30
+        mock_bot.fdb.set_channel_setting.assert_awaited_once_with(
+            target_id, "history_length", 30
         )
 
     @pytest.mark.asyncio

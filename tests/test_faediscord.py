@@ -1,6 +1,7 @@
 import asyncio
 import pytest
 import os
+import discord
 from unittest.mock import AsyncMock, Mock, patch
 from faediscord import Faebot, COMMAND_PREFIX, PROMPT_TEMPLATES, DEFAULT_TEMPLATE
 import sys
@@ -29,7 +30,23 @@ class TestFaebot:
             bot.fdb.get_conversation = AsyncMock(return_value=None)
             bot.fdb.connect = AsyncMock(return_value=True)
             bot.fdb.close = AsyncMock(return_value=True)
+            bot.fdb.assert_environment = AsyncMock(return_value=None)
             bot.fdb.load_conversations = AsyncMock(return_value={})
+
+            # Settings-split: the bot pulls the four dials from channel_settings
+            # per message. Mock the inheritance — DMs differ in freq+template.
+            async def fake_effective_settings(conversation_id, is_dm=False):
+                return {
+                    "model": "moonshotai/kimi-k2",
+                    "reply_frequency": 1.0 if is_dm else 0.05,
+                    "history_length": 69,
+                    "prompt_template": "dm" if is_dm else "default",
+                }
+
+            bot.fdb.get_effective_settings = AsyncMock(
+                side_effect=fake_effective_settings
+            )
+            bot.fdb.set_channel_setting = AsyncMock(return_value=True)
             # Use patch to override the user property
             user_mock = Mock()
             user_mock.id = 12345
@@ -48,9 +65,9 @@ class TestFaebot:
         message.author.display_name = "Test User"
         message.content = "test message"
         message.channel = Mock()
+        message.channel.__class__ = discord.TextChannel  # satisfies isinstance
         message.channel.id = 123456789
         message.channel.name = "test-channel"
-        message.channel.type = ["text"]
         message.channel.send = AsyncMock()
         message.created_at = Mock()
         message.created_at.strftime.return_value = "2024-01-01 12:00:00"
@@ -129,8 +146,12 @@ class TestFaebot:
         assert conv["conversants"] == {
             mock_message.author.name: mock_message.author.display_name
         }
+        # Settings are inherited from channel_settings, not stamped at creation.
         assert conv["reply_frequency"] == 0.05
-        assert conv["prompt_template"] == DEFAULT_TEMPLATE
+        assert conv["prompt_template"] == "default"
+        assert conv["model"] == "moonshotai/kimi-k2"
+        assert conv["history_length"] == 69
+        faebot.fdb.get_effective_settings.assert_awaited_with(conversation_id, False)
         mock_message.channel.send.assert_called_once()
 
     @pytest.mark.asyncio
@@ -141,8 +162,8 @@ class TestFaebot:
         dm_message.author = Mock()
         dm_message.author.name = "test_user"
         dm_message.channel = Mock()
+        dm_message.channel.__class__ = discord.DMChannel  # satisfies isinstance
         dm_message.channel.id = 987654321
-        dm_message.channel.type = ["private"]
         dm_message.channel.send = AsyncMock()
 
         conversation_id = str(dm_message.channel.id)
@@ -153,7 +174,10 @@ class TestFaebot:
 
         assert conversation_id in faebot.conversations
         conv = faebot.conversations[conversation_id]
+        # DM inherits __default_dm__: frequency 1, template 'dm'.
         assert conv["reply_frequency"] == 1
+        assert conv["prompt_template"] == "dm"
+        faebot.fdb.get_effective_settings.assert_awaited_with(conversation_id, True)
         assert conv["prompt_template"] == "dm"
         dm_message.channel.send.assert_called_once()
 

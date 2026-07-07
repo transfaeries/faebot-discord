@@ -111,6 +111,22 @@ class Faebot(discord.Client):
         # (on_socket_raw_receive); harmless no-op when capture is off.
         super().__init__(intents=intents, enable_debug_events=capture.RAW_ENABLED)
 
+    async def _refresh_channel_settings(self, message, conversation_id):
+        """Pull this channel's four dials (model, reply_frequency,
+        history_length, prompt_template) from channel_settings into the
+        in-memory conversation dict.
+
+        Called once per incoming message, before any setting is read — so an
+        edit made anywhere (a fae; command, the CLI, a future slash command,
+        another process) takes effect on the very next message with no restart.
+        The dict is a per-message cache; channel_settings is the source of truth.
+        """
+        if conversation_id not in self.conversations:
+            return
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        settings = await self.fdb.get_effective_settings(conversation_id, is_dm)
+        self.conversations[conversation_id].update(settings)
+
     def _render_prompt(self, template_name, message, conversation_id):
         """Render a prompt template with live context from the message."""
         template = PROMPT_TEMPLATES.get(template_name, PROMPT_TEMPLATES["default"])
@@ -246,6 +262,10 @@ class Faebot(discord.Client):
 
         # Initialize database connection
         await self.fdb.connect()
+
+        # Refuse to run against a database stamped for a different environment
+        # (the meta guard — catches wrong-DB no matter how the URL got here).
+        await self.fdb.assert_environment(env)
 
         # Load existing conversations from database
         self.conversations = await self.fdb.load_conversations()
@@ -404,6 +424,10 @@ class Faebot(discord.Client):
 
         # Log message if channel is known, regardless of reply status
         if conversation_id in self.conversations:
+            # Settings first: refresh from channel_settings so every downstream
+            # read (trim, respond-dice, generation) sees live-edited values.
+            await self._refresh_channel_settings(message, conversation_id)
+
             # Check if we should do a periodic save (every 10 messages or 5 minutes)
             if conversation_id in self.conversations:
                 conv_length = len(self.conversations[conversation_id]["conversation"])
@@ -463,7 +487,7 @@ class Faebot(discord.Client):
 
             # Handle reply if needed
             return await self._handle_conversation(message, conversation_id)
-        elif message.channel.type[0] == "private":
+        elif isinstance(message.channel, discord.DMChannel):
             # if the conversation doesn't exist and it's a DM, create a new one
             await self._initialize_conversation(
                 message, message_tokens=None, conversation_id=conversation_id
@@ -477,6 +501,12 @@ class Faebot(discord.Client):
         """Handle admin commands that start with the command prefix"""
         message_tokens = message.content.split(" ")
         command = message_tokens[0]
+
+        # Refresh the current channel's settings so a fae; query/command sees
+        # live channel_settings values (admin commands are handled before the
+        # per-message refresh). Covers the common case of tuning the channel
+        # you're in; remote-channel queries fall back to the cached dict.
+        await self._refresh_channel_settings(message, conversation_id)
 
         if command in admin_commands:
             return await admin_commands[command](
@@ -512,31 +542,31 @@ class Faebot(discord.Client):
                 f"*{self.user.display_name} remembers this place*"
             )
 
-        # Determine template and frequency based on channel type
-        if message.channel.type[0] == "text":
-            template = DEFAULT_TEMPLATE
-            reply_frequency = 0.05
+        # Determine channel name + whether this is a DM. Settings are NOT
+        # stamped at creation anymore — a new channel inherits __default__
+        # (or __default_dm__) from channel_settings until something overrides.
+        if isinstance(message.channel, discord.TextChannel):
+            is_dm = False
             name = str(message.channel.name)
-        elif message.channel.type[0] == "private":
-            template = "dm"
-            reply_frequency = 1
+        elif isinstance(message.channel, discord.DMChannel):
+            is_dm = True
             name = str(message.author.display_name)
         else:
             return await message.channel.send(
                 "Unknown channel type. Unable to proceed. Please contact administrator"
             )
 
-        # initialize conversation
+        # initialize conversation (name/conversants/history only)
         self.conversations[conversation_id] = {
             "id": conversation_id,
             "conversation": [],
             "conversants": {message.author.name: message.author.display_name},
-            "history_length": 20,
-            "reply_frequency": reply_frequency,
             "name": name,
-            "prompt_template": template,
-            "model": self.model,
         }
+        # Populate the four dials from channel_settings (inherited, not stamped).
+        self.conversations[conversation_id].update(
+            await self.fdb.get_effective_settings(conversation_id, is_dm)
+        )
 
         logging.info(
             f"Initialized new conversation {self.conversations[conversation_id]['name']} with ID {conversation_id}."
@@ -784,6 +814,11 @@ class Faebot(discord.Client):
                     "max_tokens": 250,
                     "stop": ["[20"],
                     "frequency_penalty": 1.5,
+                    # Disable provider-side reasoning: some OpenRouter providers
+                    # (e.g. Novita for kimi-k2) run a hidden reasoning pass that
+                    # eats the whole max_tokens budget and returns empty text —
+                    # faebot goes silent. We want plain completion, no reasoning.
+                    "reasoning": {"enabled": False},
                 }
 
             async with self.session.post(

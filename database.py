@@ -9,6 +9,25 @@ from functools import wraps
 env = os.getenv("ENVIRONMENT", "dev").lower()
 DEFAULT_TEMPLATE = "dev" if env == "dev" else "default"
 
+# The four per-channel dials, now sourced from the channel_settings table
+# (the settings split). Whitelist — set_channel_setting refuses anything else,
+# so the column name can be safely interpolated into SQL.
+SETTINGS_COLUMNS = ("model", "reply_frequency", "history_length", "prompt_template")
+
+# Special rows in channel_settings: policy defaults, not conversations.
+DEFAULT_ROW = "__default__"
+DEFAULT_DM_ROW = "__default_dm__"
+
+# Last-resort floor if channel_settings has no usable value at all (e.g. the
+# __default__ row is somehow missing). Never-break-the-bot; a use is logged
+# loudly because it means the defaults row needs fixing.
+SETTINGS_EMERGENCY_DEFAULTS = {
+    "model": "moonshotai/kimi-k2",
+    "reply_frequency": 0.05,
+    "history_length": 69,
+    "prompt_template": "default",
+}
+
 
 def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
     """Decorator for database operations with retry logic for dormant connections"""
@@ -91,7 +110,12 @@ def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
 class FaebotDatabase:
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
-        self.database_url = os.getenv("DATABASE_URL", "")
+        # The environment picks WHICH variable to read (the stale-shell
+        # disarm, 2026-07-07): prod reads DATABASE_URL as fly injects it;
+        # dev reads DEV_DATABASE_URL, so a shell polluted with prod secrets
+        # cannot silently hand the dev bot the production database.
+        url_variable = "DATABASE_URL" if env == "prod" else "DEV_DATABASE_URL"
+        self.database_url = os.getenv(url_variable, "")
 
         # Add sslmode=disable for local proxy
         if self.database_url and "localhost:5432" in self.database_url:
@@ -191,9 +215,16 @@ class FaebotDatabase:
         self,
         conversation_id: str,
         conversation_data: Dict[str, Any],
-        force_overwrite: bool = False,
     ):
-        """Save or update a conversation's full state"""
+        """Save a conversation's identity + history.
+
+        The metadata blob now holds only identity (name, conversants) — the
+        four dials live in channel_settings (the settings split), so this write
+        never touches them. The old shrink-guard is gone with them: history
+        trimming and fae;forget are legitimate, so a shorter history is saved
+        faithfully by the plain upsert. (Single-instance bot — no concurrent
+        writer to guard against; revisit if that ever changes.)
+        """
         if not self.pool:
             logging.warning("No database pool - cannot save conversation")
             return False
@@ -202,66 +233,11 @@ class FaebotDatabase:
             metadata = {
                 "id": conversation_data["id"],
                 "name": conversation_data["name"],
-                "history_length": conversation_data["history_length"],
-                "reply_frequency": conversation_data["reply_frequency"],
-                "prompt_template": conversation_data.get(
-                    "prompt_template", DEFAULT_TEMPLATE
-                ),
-                "model": conversation_data["model"],
                 "conversants": conversation_data.get("conversants", {}),
             }
-
             history = conversation_data.get("conversation", [])
 
             async with self.pool.acquire() as conn:
-                # Check if conversation exists
-                existing = await conn.fetchrow(
-                    """
-                    SELECT
-                        jsonb_array_length(conversation_history) as len,
-                        conversation_history->-1 as last_message  -- Get last message
-                    FROM conversations
-                    WHERE id = $1
-                    """,
-                    conversation_id,
-                )
-
-                if existing and not force_overwrite:
-                    existing_len = existing["len"]
-
-                    # Check if we're potentially losing messages
-                    if existing_len > len(history):
-                        # Try to detect if this is a legitimate trim vs data loss
-                        last_db_message = (
-                            json.loads(existing["last_message"])
-                            if existing["last_message"]
-                            else None
-                        )
-
-                        # Check if our history contains the last DB message
-                        if last_db_message and last_db_message not in history:
-                            logging.warning(
-                                f"⚠️ Refusing to save {conversation_id}: "
-                                f"DB has {existing_len} messages, memory has {len(history)}, "
-                                f"and memory doesn't contain last DB message. "
-                                f"This might lose data!"
-                            )
-                            # Just update metadata
-                            await conn.execute(
-                                """
-                                UPDATE conversations
-                                SET conversation_metadata = $1, last_updated = CURRENT_TIMESTAMP
-                                WHERE id = $2
-                                """,
-                                json.dumps(metadata),
-                                conversation_id,
-                            )
-                            logging.info(
-                                f"Updated metadata only for conversation {conversation_id}"
-                            )
-                            return True
-
-                # Normal save
                 await conn.execute(
                     """
                     INSERT INTO conversations (
@@ -277,13 +253,11 @@ class FaebotDatabase:
                     json.dumps(metadata),
                     json.dumps(history),
                 )
-
-                action = "Created" if not existing else "Updated"
-                logging.info(
-                    f"✅ {action} conversation {conversation_data['name']} "
-                    f"with {len(history)} messages in database"
-                )
-                return True
+            logging.info(
+                f"✅ Saved conversation {conversation_data['name']} "
+                f"with {len(history)} messages"
+            )
+            return True
 
         except (TypeError, ValueError) as e:  # JSON encoding errors
             logging.error(f"Failed to encode conversation data as JSON: {e}")
@@ -380,6 +354,112 @@ class FaebotDatabase:
             )
             # Return empty dict - bot will start fresh but won't crash
             return {}
+
+    async def assert_environment(self, expected: str):
+        """Refuse to run against a database stamped for a different environment.
+
+        The startup half of the meta guard (migration 007). Graceful during
+        rollout: a database without the meta table (pre-007) only warns, so
+        nothing breaks before 007 has run everywhere.
+        """
+        if not self.pool:
+            logging.warning("No database pool — cannot verify environment")
+            return
+        async with self.pool.acquire() as conn:
+            has_meta = await conn.fetchval("SELECT to_regclass('public.meta')")
+            if not has_meta:
+                logging.warning(
+                    "meta table absent — cannot verify environment (run migration 007)"
+                )
+                return
+            stamped = await conn.fetchval("SELECT environment FROM meta WHERE id = 1")
+        if stamped != expected:
+            raise RuntimeError(
+                f"❌ ENVIRONMENT MISMATCH: database is stamped '{stamped}' but the bot's "
+                f"ENVIRONMENT is '{expected}'. Refusing to start — wrong database?"
+            )
+        logging.info(f"✅ Environment verified: connected database is '{expected}'")
+
+    @with_retry()
+    async def get_effective_settings(
+        self, conversation_id: str, is_dm: bool = False
+    ) -> Dict[str, Any]:
+        """Resolve a channel's effective settings via NULL-inheritance.
+
+        Precedence (first non-NULL wins per field):
+            guild: own row -> __default__
+            dm:    own row -> __default_dm__ -> __default__
+        Falls back to SETTINGS_EMERGENCY_DEFAULTS (loudly) if even the default
+        row can't supply a value.
+        """
+        if not self.pool:
+            logging.warning(
+                "No database pool — serving emergency default settings for %s",
+                conversation_id,
+            )
+            return dict(SETTINGS_EMERGENCY_DEFAULTS)
+
+        wanted_ids = [conversation_id]
+        if is_dm:
+            wanted_ids.append(DEFAULT_DM_ROW)
+        wanted_ids.append(DEFAULT_ROW)
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM channel_settings WHERE conversation_id = ANY($1)",
+                wanted_ids,
+            )
+
+        by_id = {row["conversation_id"]: row for row in rows}
+        # Precedence order matches wanted_ids (own first, __default__ last).
+        precedence = [by_id[row_id] for row_id in wanted_ids if row_id in by_id]
+
+        resolved: Dict[str, Any] = {}
+        for column in SETTINGS_COLUMNS:
+            value = next(
+                (row[column] for row in precedence if row[column] is not None), None
+            )
+            if value is None:
+                value = SETTINGS_EMERGENCY_DEFAULTS[column]
+                logging.warning(
+                    "⚠️ No value for '%s' in channel_settings (channel %s) — "
+                    "using emergency default %r. The %s row may need fixing.",
+                    column, conversation_id, value, DEFAULT_ROW,
+                )
+            resolved[column] = value
+
+        # reply_frequency is NUMERIC -> Decimal; the bot's dice want a float.
+        resolved["reply_frequency"] = float(resolved["reply_frequency"])
+        return resolved
+
+    @with_retry()
+    async def set_channel_setting(self, conversation_id: str, key: str, value: Any):
+        """Write-through a single setting (UPSERT). NULL value = reset to inherit.
+
+        `key` is whitelisted against SETTINGS_COLUMNS, so it is safe to
+        interpolate into the SQL; values are always parameterised.
+        """
+        if key not in SETTINGS_COLUMNS:
+            raise ValueError(f"unknown setting {key!r}")
+        if not self.pool:
+            logging.warning("No database pool — cannot set %s for %s", key, conversation_id)
+            return False
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                INSERT INTO channel_settings (conversation_id, {key})
+                VALUES ($1, $2)
+                ON CONFLICT (conversation_id)
+                DO UPDATE SET {key} = EXCLUDED.{key}
+                """,
+                conversation_id,
+                value,
+            )
+        logging.info(
+            "✅ channel_settings: %s.%s = %r", conversation_id, key, value
+        )
+        return True
 
     @with_retry()
     async def save_captured_event(self, kind: str, captured_at, payload_json: str):
