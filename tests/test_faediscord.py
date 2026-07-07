@@ -1,6 +1,7 @@
 import asyncio
 import pytest
 import os
+import discord
 from unittest.mock import AsyncMock, Mock, patch
 from faediscord import Faebot, COMMAND_PREFIX, PROMPT_TEMPLATES, DEFAULT_TEMPLATE
 import sys
@@ -63,9 +64,9 @@ class TestFaebot:
         message.author.display_name = "Test User"
         message.content = "test message"
         message.channel = Mock()
+        message.channel.__class__ = discord.TextChannel  # satisfies isinstance
         message.channel.id = 123456789
         message.channel.name = "test-channel"
-        message.channel.type = ["text"]
         message.channel.send = AsyncMock()
         message.created_at = Mock()
         message.created_at.strftime.return_value = "2024-01-01 12:00:00"
@@ -160,8 +161,8 @@ class TestFaebot:
         dm_message.author = Mock()
         dm_message.author.name = "test_user"
         dm_message.channel = Mock()
+        dm_message.channel.__class__ = discord.DMChannel  # satisfies isinstance
         dm_message.channel.id = 987654321
-        dm_message.channel.type = ["private"]
         dm_message.channel.send = AsyncMock()
 
         conversation_id = str(dm_message.channel.id)

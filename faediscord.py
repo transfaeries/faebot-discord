@@ -483,7 +483,7 @@ class Faebot(discord.Client):
 
             # Handle reply if needed
             return await self._handle_conversation(message, conversation_id)
-        elif message.channel.type[0] == "private":
+        elif isinstance(message.channel, discord.DMChannel):
             # if the conversation doesn't exist and it's a DM, create a new one
             await self._initialize_conversation(
                 message, message_tokens=None, conversation_id=conversation_id
@@ -541,10 +541,10 @@ class Faebot(discord.Client):
         # Determine channel name + whether this is a DM. Settings are NOT
         # stamped at creation anymore — a new channel inherits __default__
         # (or __default_dm__) from channel_settings until something overrides.
-        if message.channel.type[0] == "text":
+        if isinstance(message.channel, discord.TextChannel):
             is_dm = False
             name = str(message.channel.name)
-        elif message.channel.type[0] == "private":
+        elif isinstance(message.channel, discord.DMChannel):
             is_dm = True
             name = str(message.author.display_name)
         else:

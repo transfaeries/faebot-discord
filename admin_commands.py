@@ -1,5 +1,6 @@
 import logging
 import os
+from decimal import Decimal
 from functools import wraps
 
 # Get environment variables
@@ -201,7 +202,11 @@ async def _set_reply_frequency(bot, message, message_tokens, conversation_id):
                 return await message.channel.send("Frequency must be between 0 and 1")
             old_freq = bot.conversations[target_id]["reply_frequency"]
             bot.conversations[target_id]["reply_frequency"] = new_freq
-            await bot.fdb.set_channel_setting(target_id, "reply_frequency", new_freq)
+            # Store the exact decimal (from the original string) so the NUMERIC
+            # column keeps 0.3 as 0.3, not the 0.29999… float approximation.
+            await bot.fdb.set_channel_setting(
+                target_id, "reply_frequency", Decimal(message_tokens[1])
+            )
             logging.debug(
                 f"Admin {message.author.name} changed reply frequency for conversation {target_id} from {old_freq} to {new_freq}"
             )
