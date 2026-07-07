@@ -165,6 +165,7 @@ async def _set_or_return_model(bot, message, message_tokens=None, conversation_i
         new_model = message_tokens[1]
         old_model = bot.conversations[target_id]["model"]
         bot.conversations[target_id]["model"] = new_model
+        await bot.fdb.set_channel_setting(target_id, "model", new_model)
         logging.debug(
             f"Admin {message.author.name} changed model for conversation {target_id} from {old_model} to {new_model}"
         )
@@ -200,6 +201,7 @@ async def _set_reply_frequency(bot, message, message_tokens, conversation_id):
                 return await message.channel.send("Frequency must be between 0 and 1")
             old_freq = bot.conversations[target_id]["reply_frequency"]
             bot.conversations[target_id]["reply_frequency"] = new_freq
+            await bot.fdb.set_channel_setting(target_id, "reply_frequency", new_freq)
             logging.debug(
                 f"Admin {message.author.name} changed reply frequency for conversation {target_id} from {old_freq} to {new_freq}"
             )
@@ -239,11 +241,14 @@ async def _set_history_length(bot, message, message_tokens, conversation_id):
 
     if len(message_tokens) > length_index:
         try:
-            new_length = int(message_tokens[1])
+            # length_index skips the optional conversation-id token — reading
+            # message_tokens[1] here was the snowflake-as-length corruption bug.
+            new_length = int(message_tokens[length_index])
             if new_length < 1:
                 return await message.channel.send("History length must be positive")
             old_length = bot.conversations[target_id]["history_length"]
             bot.conversations[target_id]["history_length"] = new_length
+            await bot.fdb.set_channel_setting(target_id, "history_length", new_length)
             logging.debug(
                 f"Admin {message.author.name} changed history length for conversation {target_id} from {old_length} to {new_length}"
             )
