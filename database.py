@@ -9,6 +9,25 @@ from functools import wraps
 env = os.getenv("ENVIRONMENT", "dev").lower()
 DEFAULT_TEMPLATE = "dev" if env == "dev" else "default"
 
+# The four per-channel dials, now sourced from the channel_settings table
+# (the settings split). Whitelist — set_channel_setting refuses anything else,
+# so the column name can be safely interpolated into SQL.
+SETTINGS_COLUMNS = ("model", "reply_frequency", "history_length", "prompt_template")
+
+# Special rows in channel_settings: policy defaults, not conversations.
+DEFAULT_ROW = "__default__"
+DEFAULT_DM_ROW = "__default_dm__"
+
+# Last-resort floor if channel_settings has no usable value at all (e.g. the
+# __default__ row is somehow missing). Never-break-the-bot; a use is logged
+# loudly because it means the defaults row needs fixing.
+SETTINGS_EMERGENCY_DEFAULTS = {
+    "model": "moonshotai/kimi-k2",
+    "reply_frequency": 0.05,
+    "history_length": 69,
+    "prompt_template": "default",
+}
+
 
 def with_retry(max_retries=3, initial_delay=1, backoff_factor=2):
     """Decorator for database operations with retry logic for dormant connections"""
@@ -385,6 +404,87 @@ class FaebotDatabase:
             )
             # Return empty dict - bot will start fresh but won't crash
             return {}
+
+    @with_retry()
+    async def get_effective_settings(
+        self, conversation_id: str, is_dm: bool = False
+    ) -> Dict[str, Any]:
+        """Resolve a channel's effective settings via NULL-inheritance.
+
+        Precedence (first non-NULL wins per field):
+            guild: own row -> __default__
+            dm:    own row -> __default_dm__ -> __default__
+        Falls back to SETTINGS_EMERGENCY_DEFAULTS (loudly) if even the default
+        row can't supply a value.
+        """
+        if not self.pool:
+            logging.warning(
+                "No database pool — serving emergency default settings for %s",
+                conversation_id,
+            )
+            return dict(SETTINGS_EMERGENCY_DEFAULTS)
+
+        wanted_ids = [conversation_id]
+        if is_dm:
+            wanted_ids.append(DEFAULT_DM_ROW)
+        wanted_ids.append(DEFAULT_ROW)
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM channel_settings WHERE conversation_id = ANY($1)",
+                wanted_ids,
+            )
+
+        by_id = {row["conversation_id"]: row for row in rows}
+        # Precedence order matches wanted_ids (own first, __default__ last).
+        precedence = [by_id[row_id] for row_id in wanted_ids if row_id in by_id]
+
+        resolved: Dict[str, Any] = {}
+        for column in SETTINGS_COLUMNS:
+            value = next(
+                (row[column] for row in precedence if row[column] is not None), None
+            )
+            if value is None:
+                value = SETTINGS_EMERGENCY_DEFAULTS[column]
+                logging.warning(
+                    "⚠️ No value for '%s' in channel_settings (channel %s) — "
+                    "using emergency default %r. The %s row may need fixing.",
+                    column, conversation_id, value, DEFAULT_ROW,
+                )
+            resolved[column] = value
+
+        # reply_frequency is NUMERIC -> Decimal; the bot's dice want a float.
+        resolved["reply_frequency"] = float(resolved["reply_frequency"])
+        return resolved
+
+    @with_retry()
+    async def set_channel_setting(self, conversation_id: str, key: str, value: Any):
+        """Write-through a single setting (UPSERT). NULL value = reset to inherit.
+
+        `key` is whitelisted against SETTINGS_COLUMNS, so it is safe to
+        interpolate into the SQL; values are always parameterised.
+        """
+        if key not in SETTINGS_COLUMNS:
+            raise ValueError(f"unknown setting {key!r}")
+        if not self.pool:
+            logging.warning("No database pool — cannot set %s for %s", key, conversation_id)
+            return False
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                INSERT INTO channel_settings (conversation_id, {key})
+                VALUES ($1, $2)
+                ON CONFLICT (conversation_id)
+                DO UPDATE SET {key} = EXCLUDED.{key}
+                """,
+                conversation_id,
+                value,
+            )
+        logging.info(
+            "✅ channel_settings: %s.%s = %r", conversation_id, key, value
+        )
+        return True
 
     @with_retry()
     async def save_captured_event(self, kind: str, captured_at, payload_json: str):
