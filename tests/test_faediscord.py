@@ -30,6 +30,21 @@ class TestFaebot:
             bot.fdb.connect = AsyncMock(return_value=True)
             bot.fdb.close = AsyncMock(return_value=True)
             bot.fdb.load_conversations = AsyncMock(return_value={})
+
+            # Settings-split: the bot pulls the four dials from channel_settings
+            # per message. Mock the inheritance — DMs differ in freq+template.
+            async def fake_effective_settings(conversation_id, is_dm=False):
+                return {
+                    "model": "moonshotai/kimi-k2",
+                    "reply_frequency": 1.0 if is_dm else 0.05,
+                    "history_length": 69,
+                    "prompt_template": "dm" if is_dm else "default",
+                }
+
+            bot.fdb.get_effective_settings = AsyncMock(
+                side_effect=fake_effective_settings
+            )
+            bot.fdb.set_channel_setting = AsyncMock(return_value=True)
             # Use patch to override the user property
             user_mock = Mock()
             user_mock.id = 12345
@@ -129,8 +144,12 @@ class TestFaebot:
         assert conv["conversants"] == {
             mock_message.author.name: mock_message.author.display_name
         }
+        # Settings are inherited from channel_settings, not stamped at creation.
         assert conv["reply_frequency"] == 0.05
-        assert conv["prompt_template"] == DEFAULT_TEMPLATE
+        assert conv["prompt_template"] == "default"
+        assert conv["model"] == "moonshotai/kimi-k2"
+        assert conv["history_length"] == 69
+        faebot.fdb.get_effective_settings.assert_awaited_with(conversation_id, False)
         mock_message.channel.send.assert_called_once()
 
     @pytest.mark.asyncio
@@ -153,7 +172,10 @@ class TestFaebot:
 
         assert conversation_id in faebot.conversations
         conv = faebot.conversations[conversation_id]
+        # DM inherits __default_dm__: frequency 1, template 'dm'.
         assert conv["reply_frequency"] == 1
+        assert conv["prompt_template"] == "dm"
+        faebot.fdb.get_effective_settings.assert_awaited_with(conversation_id, True)
         assert conv["prompt_template"] == "dm"
         dm_message.channel.send.assert_called_once()
 

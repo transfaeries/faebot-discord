@@ -111,6 +111,22 @@ class Faebot(discord.Client):
         # (on_socket_raw_receive); harmless no-op when capture is off.
         super().__init__(intents=intents, enable_debug_events=capture.RAW_ENABLED)
 
+    async def _refresh_channel_settings(self, message, conversation_id):
+        """Pull this channel's four dials (model, reply_frequency,
+        history_length, prompt_template) from channel_settings into the
+        in-memory conversation dict.
+
+        Called once per incoming message, before any setting is read — so an
+        edit made anywhere (a fae; command, the CLI, a future slash command,
+        another process) takes effect on the very next message with no restart.
+        The dict is a per-message cache; channel_settings is the source of truth.
+        """
+        if conversation_id not in self.conversations:
+            return
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        settings = await self.fdb.get_effective_settings(conversation_id, is_dm)
+        self.conversations[conversation_id].update(settings)
+
     def _render_prompt(self, template_name, message, conversation_id):
         """Render a prompt template with live context from the message."""
         template = PROMPT_TEMPLATES.get(template_name, PROMPT_TEMPLATES["default"])
@@ -404,6 +420,10 @@ class Faebot(discord.Client):
 
         # Log message if channel is known, regardless of reply status
         if conversation_id in self.conversations:
+            # Settings first: refresh from channel_settings so every downstream
+            # read (trim, respond-dice, generation) sees live-edited values.
+            await self._refresh_channel_settings(message, conversation_id)
+
             # Check if we should do a periodic save (every 10 messages or 5 minutes)
             if conversation_id in self.conversations:
                 conv_length = len(self.conversations[conversation_id]["conversation"])
@@ -512,31 +532,31 @@ class Faebot(discord.Client):
                 f"*{self.user.display_name} remembers this place*"
             )
 
-        # Determine template and frequency based on channel type
+        # Determine channel name + whether this is a DM. Settings are NOT
+        # stamped at creation anymore — a new channel inherits __default__
+        # (or __default_dm__) from channel_settings until something overrides.
         if message.channel.type[0] == "text":
-            template = DEFAULT_TEMPLATE
-            reply_frequency = 0.05
+            is_dm = False
             name = str(message.channel.name)
         elif message.channel.type[0] == "private":
-            template = "dm"
-            reply_frequency = 1
+            is_dm = True
             name = str(message.author.display_name)
         else:
             return await message.channel.send(
                 "Unknown channel type. Unable to proceed. Please contact administrator"
             )
 
-        # initialize conversation
+        # initialize conversation (name/conversants/history only)
         self.conversations[conversation_id] = {
             "id": conversation_id,
             "conversation": [],
             "conversants": {message.author.name: message.author.display_name},
-            "history_length": 20,
-            "reply_frequency": reply_frequency,
             "name": name,
-            "prompt_template": template,
-            "model": self.model,
         }
+        # Populate the four dials from channel_settings (inherited, not stamped).
+        self.conversations[conversation_id].update(
+            await self.fdb.get_effective_settings(conversation_id, is_dm)
+        )
 
         logging.info(
             f"Initialized new conversation {self.conversations[conversation_id]['name']} with ID {conversation_id}."
