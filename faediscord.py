@@ -810,6 +810,11 @@ class Faebot(discord.Client):
                     "max_tokens": 250,
                     "stop": ["[20"],
                     "frequency_penalty": 1.5,
+                    # Disable provider-side reasoning: some OpenRouter providers
+                    # (e.g. Novita for kimi-k2) run a hidden reasoning pass that
+                    # eats the whole max_tokens budget and returns empty text —
+                    # faebot goes silent. We want plain completion, no reasoning.
+                    "reasoning": {"enabled": False},
                 }
 
             async with self.session.post(
