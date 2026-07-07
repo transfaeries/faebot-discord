@@ -498,6 +498,12 @@ class Faebot(discord.Client):
         message_tokens = message.content.split(" ")
         command = message_tokens[0]
 
+        # Refresh the current channel's settings so a fae; query/command sees
+        # live channel_settings values (admin commands are handled before the
+        # per-message refresh). Covers the common case of tuning the channel
+        # you're in; remote-channel queries fall back to the cached dict.
+        await self._refresh_channel_settings(message, conversation_id)
+
         if command in admin_commands:
             return await admin_commands[command](
                 self, message, message_tokens, conversation_id
