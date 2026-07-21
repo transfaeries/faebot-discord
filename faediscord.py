@@ -15,7 +15,7 @@ import capture
 import time
 
 
-model = os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")  # Updated default model
+model = os.getenv("MODEL_NAME", "moonshotai/kimi-k2")  # Updated default model
 admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
 
@@ -427,6 +427,17 @@ class Faebot(discord.Client):
             # Settings first: refresh from channel_settings so every downstream
             # read (trim, respond-dice, generation) sees live-edited values.
             await self._refresh_channel_settings(message, conversation_id)
+
+            # Stamp WHERE this conversation lives, every message, so it
+            # self-heals for conversations that predate the field (the same
+            # lazy cleanup the settings split relied on). A DM has no guild —
+            # recording that is what lets any reader resolve DM inheritance
+            # without asking Discord. Stamped before the periodic save below
+            # so it lands at the first opportunity.
+            conversation = self.conversations[conversation_id]
+            conversation["guild_id"] = str(message.guild.id) if message.guild else None
+            conversation["guild_name"] = message.guild.name if message.guild else None
+            conversation["is_dm"] = message.guild is None
 
             # Check if we should do a periodic save (every 10 messages or 5 minutes)
             if conversation_id in self.conversations:

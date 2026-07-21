@@ -235,6 +235,14 @@ class FaebotDatabase:
                 "name": conversation_data["name"],
                 "conversants": conversation_data.get("conversants", {}),
             }
+            # Where this conversation LIVES (2026-07-20): guild id/name and
+            # whether it's a DM — identity, like the name, so it rides in the
+            # blob. Only written when known, because this write replaces the
+            # whole blob: a save from a path that never stamped them must not
+            # erase what an earlier stamped save recorded.
+            for location_key in ("guild_id", "guild_name", "is_dm"):
+                if conversation_data.get(location_key) is not None:
+                    metadata[location_key] = conversation_data[location_key]
             history = conversation_data.get("conversation", [])
 
             async with self.pool.acquire() as conn:
@@ -316,6 +324,11 @@ class FaebotDatabase:
                             "model": metadata.get(
                                 "model", "google/gemini-2.0-flash-001"
                             ),
+                            # Location, carried back into memory so a later
+                            # save doesn't drop what a previous one recorded.
+                            "guild_id": metadata.get("guild_id"),
+                            "guild_name": metadata.get("guild_name"),
+                            "is_dm": metadata.get("is_dm"),
                         }
                         successful += 1
                         logging.debug(
