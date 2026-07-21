@@ -38,7 +38,12 @@ from typing import Any, Dict, Optional
 
 
 # Default-on: only an explicitly truthy CAPTURE_DISABLED turns capture off.
-CAPTURE_ENABLED = os.getenv("CAPTURE_DISABLED", "").strip().lower() in ("", "0", "false", "no")
+CAPTURE_ENABLED = os.getenv("CAPTURE_DISABLED", "").strip().lower() in (
+    "",
+    "0",
+    "false",
+    "no",
+)
 RAW_ENABLED = CAPTURE_ENABLED and os.getenv("CAPTURE_RAW", "1") != "0"
 
 # The database handle is injected at startup (see init) to avoid a circular import.

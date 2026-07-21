@@ -26,14 +26,20 @@ logging.basicConfig(level=logging.INFO)
 def resolve() -> tuple[str, str]:
     """Return (requested_env, database_url); require an explicit --env."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env", required=True, choices=["dev", "prod"],
-                        help="which database this migration targets + stamps")
+    parser.add_argument(
+        "--env",
+        required=True,
+        choices=["dev", "prod"],
+        help="which database this migration targets + stamps",
+    )
     arguments = parser.parse_args()
 
     variable = "PROD_DATABASE_URL" if arguments.env == "prod" else "DEV_DATABASE_URL"
     database_url = os.getenv(variable, "")
     if not database_url:
-        sys.exit(f"{variable} is not set — source ../secrets/{arguments.env}_discord_secrets.fish first")
+        sys.exit(
+            f"{variable} is not set — source ../secrets/{arguments.env}_discord_secrets.fish first"
+        )
     if "localhost:5432" in database_url:
         database_url += (
             "?sslmode=disable" if "?" not in database_url else "&sslmode=disable"

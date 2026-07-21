@@ -44,14 +44,20 @@ def resolve_database_url() -> str:
     prod_discord_secrets.fish). Pattern for all migrations from 006 onward.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env", required=True, choices=["dev", "prod"],
-                        help="which database this migration targets")
+    parser.add_argument(
+        "--env",
+        required=True,
+        choices=["dev", "prod"],
+        help="which database this migration targets",
+    )
     arguments = parser.parse_args()
 
     variable = "PROD_DATABASE_URL" if arguments.env == "prod" else "DEV_DATABASE_URL"
     database_url = os.getenv(variable, "")
     if not database_url:
-        sys.exit(f"{variable} is not set — source ../secrets/{arguments.env}_discord_secrets.fish first")
+        sys.exit(
+            f"{variable} is not set — source ../secrets/{arguments.env}_discord_secrets.fish first"
+        )
     logging.info(f"Requested environment: {arguments.env} (via {variable})")
 
     if "localhost:5432" in database_url:

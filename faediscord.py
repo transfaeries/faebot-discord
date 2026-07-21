@@ -276,7 +276,9 @@ class Faebot(discord.Client):
         if capture.is_enabled():
             logging.info("🎥 CAPTURE ON — recording raw events to captured_events")
         else:
-            logging.warning("⚠️ capture OFF (CAPTURE_DISABLED is set — faebot is not recording)")
+            logging.warning(
+                "⚠️ capture OFF (CAPTURE_DISABLED is set — faebot is not recording)"
+            )
         logging.info("------")
 
     # --- spike-01 capture delegates -------------------------------------------

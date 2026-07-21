@@ -1,17 +1,31 @@
 """settings_cli.py — the see-and-edit instrument (step 5 of the story).
 
-Read (and soon set) per-channel dials without spamming a channel or fighting
-DM commands. Talks to Postgres directly — through `fly proxy` for prod — so
+Read and set per-channel dials without spamming a channel or fighting DM
+commands. Talks to Postgres directly — through `fly proxy` for prod — so
 there is NO new attack surface on the bot, and the tool survives the move off
 fly (faebot's own computer, ~2026-08-06).
 
-    poetry run python settings_cli.py show --env dev
-    poetry run python settings_cli.py show --env prod    # needs fly proxy open
+    poetry run python settings_cli.py show  --env prod          # needs fly proxy
+    poetry run python settings_cli.py set   --env prod --id <id> --property frequency --value 0.2
+    poetry run python settings_cli.py unset --env prod --id <id> --property frequency
+
+Run any of these with pieces missing and the error teaches the next step: no
+--id lists where to find one, --id alone lists the properties with their
+current values, --property alone shows current/inherited/allowed and writes
+nothing (a single-channel inspector, on purpose).
+
+set vs unset: `set` writes an override on this channel; `unset` REMOVES the
+override so the channel goes back to inheriting — and keeps inheriting when
+the policy row later changes. Copying today's default into a row is a
+different, usually-wrong thing, so there is no verb for it.
 
 The inheritance rules are NOT reimplemented here: this calls the bot's own
-`FaebotDatabase.get_effective_settings()`, so the instrument and the bot can
-never drift apart. What the CLI adds is the *overview* — every channel at
-once, with each value marked as its own override or inherited from policy.
+`get_effective_settings()` / `set_channel_setting()`, so the instrument and
+the bot cannot drift apart. What the CLI adds is the *overview* — every
+channel at once, grouped by server, each value marked as this channel's own
+override or inherited from policy. It reads only discord-owned tables;
+recovering anything from `captured_events` would couple these settings to
+core's raw material.
 
 Environment (the stale-shell disarm, 2026-07-07): --env is required and picks
 which explicit variable to read — DEV_DATABASE_URL / PROD_DATABASE_URL, the
@@ -19,11 +33,10 @@ names the secrets files provide. Nothing ambient. The connected database is
 then checked against its own `meta` stamp (migration 007), so a proxy pointed
 at the wrong world fails loudly instead of quietly editing production.
 
-Known gap (2026-07-20): the database does not record whether a conversation
-is a DM, so this tool resolves every channel by the guild rules (own row ->
-__default__). DMs additionally inherit __default_dm__ in the live bot; both
-policy rows are printed so the DM answer is readable, and `--dm` forces DM
-resolution for a single channel.
+Where a conversation lives (guild id/name, is_dm) is recorded by the bot on
+every message and backfilled by backfill_locations.py; DMs therefore resolve
+their own inheritance chain. `--dm` only forces it for conversations that
+haven't been located yet.
 """
 
 import argparse
@@ -77,9 +90,16 @@ async def open_database(environment: str) -> FaebotDatabase:
     return database
 
 
+def pool_of(database: FaebotDatabase):
+    """The connection pool, narrowed — open_database guarantees one exists."""
+    if database.pool is None:
+        sys.exit("database connection lost")
+    return database.pool
+
+
 async def load_channels(database: FaebotDatabase) -> list[dict]:
     """Every conversation with its name, newest activity first."""
-    async with database.pool.acquire() as connection:
+    async with pool_of(database).acquire() as connection:
         rows = await connection.fetch(
             "SELECT id, conversation_metadata, last_updated FROM conversations"
         )
@@ -110,7 +130,7 @@ UNKNOWN_GROUP = (
 
 async def load_overrides(database: FaebotDatabase) -> dict[str, dict]:
     """Raw channel_settings rows — which fields a channel sets for itself."""
-    async with database.pool.acquire() as connection:
+    async with pool_of(database).acquire() as connection:
         rows = await connection.fetch("SELECT * FROM channel_settings")
     return {row["conversation_id"]: dict(row) for row in rows}
 
@@ -161,7 +181,9 @@ async def show(environment: str, dm: bool) -> None:
                 # Per-channel DM resolution once recorded; --dm forces it for
                 # conversations that haven't healed yet.
                 is_dm = channel["is_dm"] if channel["is_dm"] is not None else dm
-                settings = await database.get_effective_settings(channel["id"], is_dm=is_dm)
+                settings = await database.get_effective_settings(
+                    channel["id"], is_dm=is_dm
+                )
                 own = overrides.get(channel["id"], {})
                 cells = []
                 for column in SETTINGS_COLUMNS:
@@ -189,7 +211,7 @@ async def show(environment: str, dm: bool) -> None:
             )
             print(f"{policy_id:<24} {values}")
         print()
-        print(f"  * = set on this channel   · = inherited   — = unset")
+        print("  * = set on this channel   · = inherited   — = unset")
         print(
             f"  resolution: {'DM (own → __default_dm__ → __default__)' if dm else 'guild (own → __default__)'}"
         )
@@ -243,7 +265,7 @@ def coerce(column: str, raw: str):
 
 async def load_constraints(database: FaebotDatabase) -> dict[str, str]:
     """The CHECK constraints, quoted back as hints — the DB is the truth."""
-    async with database.pool.acquire() as connection:
+    async with pool_of(database).acquire() as connection:
         rows = await connection.fetch(
             "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint "
             "WHERE conrelid = 'channel_settings'::regclass AND contype = 'c'"
@@ -265,8 +287,9 @@ async def describe(database: FaebotDatabase, conversation_id: str) -> dict | Non
     return None
 
 
-async def count_inheritors(database: FaebotDatabase, column: str,
-                           policy_row: str) -> int:
+async def count_inheritors(
+    database: FaebotDatabase, column: str, policy_row: str
+) -> int:
     """How many conversations would feel a change to this policy row."""
     channels = await load_channels(database)
     overrides = await load_overrides(database)
@@ -296,14 +319,16 @@ def label_for(channel: dict | None, conversation_id: str) -> str:
     return f"{channel['name']} ({where})"
 
 
-async def write_setting(environment: str, conversation_id: str | None,
-                        property_name: str | None, value: str | None,
-                        clearing: bool) -> None:
+async def write_setting(
+    environment: str,
+    conversation_id: str | None,
+    property_name: str | None,
+    value: str | None,
+    clearing: bool,
+) -> None:
     """set/unset, with a ladder of errors that each teach the next step."""
     database = await open_database(environment)
     try:
-        command = "unset" if clearing else "set"
-
         if not conversation_id:
             sys.exit(
                 "which channel? pass --id <conversation id>\n"
@@ -342,8 +367,7 @@ async def write_setting(environment: str, conversation_id: str | None,
             hints = await load_constraints(database)
             inherited = "—"
             if conversation_id not in POLICY_ROWS:
-                policy = overrides.get(
-                    DEFAULT_DM_ROW if is_dm else DEFAULT_ROW, {})
+                policy = overrides.get(DEFAULT_DM_ROW if is_dm else DEFAULT_ROW, {})
                 fallback = policy.get(column)
                 if fallback is None:
                     fallback = overrides.get(DEFAULT_ROW, {}).get(column)
@@ -363,9 +387,11 @@ async def write_setting(environment: str, conversation_id: str | None,
             if conversation_id == DEFAULT_ROW:
                 # The base policy has nothing above it: clearing it drops the
                 # bot onto its emergency defaults, loudly. Not an unset target.
-                message.append("  pass --value <v>   (this row is the bottom of "
-                               "the chain — clearing it falls back to the bot's "
-                               "emergency defaults)")
+                message.append(
+                    "  pass --value <v>   (this row is the bottom of "
+                    "the chain — clearing it falls back to the bot's "
+                    "emergency defaults)"
+                )
             else:
                 message.append(
                     f"  pass --value <v>, or:  settings_cli.py unset --env {environment} "
@@ -374,12 +400,19 @@ async def write_setting(environment: str, conversation_id: str | None,
             sys.exit("\n".join(message))
 
         before = format_value(column, own.get(column))
-        new_value = None if clearing else coerce(column, value)
+        if clearing:
+            new_value = None
+        else:
+            # The ladder above exits when a set has no --value, so by here
+            # it is present; spelled out so the type checker agrees.
+            new_value = coerce(column, value or "")
 
         if conversation_id in POLICY_ROWS:
             affected = await count_inheritors(database, column, conversation_id)
-            print(f"⚠ {conversation_id} is a POLICY row — {affected} conversation(s) "
-                  f"inherit {column} from it")
+            print(
+                f"⚠ {conversation_id} is a POLICY row — {affected} conversation(s) "
+                f"inherit {column} from it"
+            )
 
         try:
             # A CHECK refusal is an EXPECTED outcome here (the user typed a bad
@@ -417,44 +450,59 @@ def main() -> None:
     # subcommand: `settings_cli.py show --env dev`.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "--env", required=True, choices=["dev", "prod"],
+        "--env",
+        required=True,
+        choices=["dev", "prod"],
         help="which database to talk to (reads DEV_/PROD_DATABASE_URL)",
     )
 
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     show_parser = subparsers.add_parser(
-        "show", parents=[common], help="table of every channel's settings")
+        "show", parents=[common], help="table of every channel's settings"
+    )
     show_parser.add_argument(
-        "--dm", action="store_true",
+        "--dm",
+        action="store_true",
         help="resolve with DM rules for conversations whose kind isn't recorded",
     )
 
     # set/unset share --id and --property; each argument is optional so a
     # missing one can teach the next step instead of erroring blankly.
     write_common = argparse.ArgumentParser(add_help=False, parents=[common])
-    write_common.add_argument("--id", help="conversation id (never the name — "
-                                           "names duplicate across servers)")
-    write_common.add_argument("--property",
-                              help="model | frequency | history | template")
+    write_common.add_argument(
+        "--id",
+        help="conversation id (never the name — " "names duplicate across servers)",
+    )
+    write_common.add_argument(
+        "--property", help="model | frequency | history | template"
+    )
 
     set_parser = subparsers.add_parser(
-        "set", parents=[write_common], help="set one dial on one channel")
+        "set", parents=[write_common], help="set one dial on one channel"
+    )
     set_parser.add_argument("--value", help="the new value")
     subparsers.add_parser(
-        "unset", parents=[write_common],
+        "unset",
+        parents=[write_common],
         help="remove an override so the channel inherits again (and keeps "
-             "inheriting when the policy changes)")
+        "inheriting when the policy changes)",
+    )
 
     arguments = parser.parse_args()
 
     if arguments.command == "show":
         asyncio.run(show(arguments.env, arguments.dm))
     elif arguments.command in ("set", "unset"):
-        asyncio.run(write_setting(
-            arguments.env, arguments.id, arguments.property,
-            getattr(arguments, "value", None), clearing=arguments.command == "unset",
-        ))
+        asyncio.run(
+            write_setting(
+                arguments.env,
+                arguments.id,
+                arguments.property,
+                getattr(arguments, "value", None),
+                clearing=arguments.command == "unset",
+            )
+        )
 
 
 if __name__ == "__main__":

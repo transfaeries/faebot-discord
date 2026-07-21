@@ -437,7 +437,10 @@ class FaebotDatabase:
                 logging.warning(
                     "⚠️ No value for '%s' in channel_settings (channel %s) — "
                     "using emergency default %r. The %s row may need fixing.",
-                    column, conversation_id, value, DEFAULT_ROW,
+                    column,
+                    conversation_id,
+                    value,
+                    DEFAULT_ROW,
                 )
             resolved[column] = value
 
@@ -455,7 +458,9 @@ class FaebotDatabase:
         if key not in SETTINGS_COLUMNS:
             raise ValueError(f"unknown setting {key!r}")
         if not self.pool:
-            logging.warning("No database pool — cannot set %s for %s", key, conversation_id)
+            logging.warning(
+                "No database pool — cannot set %s for %s", key, conversation_id
+            )
             return False
 
         async with self.pool.acquire() as conn:
@@ -469,9 +474,7 @@ class FaebotDatabase:
                 conversation_id,
                 value,
             )
-        logging.info(
-            "✅ channel_settings: %s.%s = %r", conversation_id, key, value
-        )
+        logging.info("✅ channel_settings: %s.%s = %r", conversation_id, key, value)
         return True
 
     @with_retry()

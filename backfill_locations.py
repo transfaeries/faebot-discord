@@ -46,7 +46,9 @@ def resolve_database_url(environment: str) -> str:
     return database_url
 
 
-async def guild_name(client: discord.Client, guild_id: int, cache: dict) -> str | None:
+async def guild_name(
+    client: discord.Client, guild_id: int, cache: dict[int, str | None]
+) -> str | None:
     """Fetch a guild's NAME over REST.
 
     Without a gateway connection there is no guild cache, so the `.guild` on a
@@ -63,15 +65,17 @@ async def guild_name(client: discord.Client, guild_id: int, cache: dict) -> str 
     return cache[guild_id]
 
 
-async def locate(client: discord.Client, conversation_id: str, cache: dict) -> dict | None:
+async def locate(
+    client: discord.Client, conversation_id: str, cache: dict[int, str | None]
+) -> dict | None:
     """Ask Discord where this conversation lives. None = couldn't tell."""
     try:
         channel = await client.fetch_channel(int(conversation_id))
     except discord.NotFound:
-        print(f"    not found (deleted channel, or bot removed) — leaving unrecorded")
+        print("    not found (deleted channel, or bot removed) — leaving unrecorded")
         return None
     except discord.Forbidden:
-        print(f"    no access (bot can't see it) — leaving unrecorded")
+        print("    no access (bot can't see it) — leaving unrecorded")
         return None
     except (discord.HTTPException, ValueError) as error:
         print(f"    lookup failed: {error} — leaving unrecorded")
@@ -104,16 +108,16 @@ async def backfill(environment: str, write: bool) -> None:
         "OR conversation_metadata ? 'is_dm'"
     )
     total = await connection.fetchval("SELECT count(*) FROM conversations")
-    print(f"Found {total} conversations, {stamped} already located, "
-          f"{total - stamped} to look up.")
+    print(
+        f"Found {total} conversations, {stamped} already located, "
+        f"{total - stamped} to look up."
+    )
     if total == stamped:
         print("Nothing to backfill.")
         await connection.close()
         return
 
-    rows = await connection.fetch(
-        "SELECT id, conversation_metadata FROM conversations"
-    )
+    rows = await connection.fetch("SELECT id, conversation_metadata FROM conversations")
 
     client = discord.Client(intents=discord.Intents.default())
     await client.login(token)
@@ -134,27 +138,34 @@ async def backfill(environment: str, write: bool) -> None:
             if location is None:
                 continue
 
-            where = "DM" if location["is_dm"] else f"{location['guild_name']} ({location['guild_id']})"
+            where = (
+                "DM"
+                if location["is_dm"]
+                else f"{location['guild_name']} ({location['guild_id']})"
+            )
             print(f"    → {where}")
             located += 1
             if not write:
                 continue
 
-            metadata.update({
-                key: value for key, value in location.items() if value is not None
-            })
+            metadata.update(
+                {key: value for key, value in location.items() if value is not None}
+            )
             if location["is_dm"]:
                 metadata["is_dm"] = True
             await connection.execute(
                 "UPDATE conversations SET conversation_metadata = $1 WHERE id = $2",
-                json.dumps(metadata), row["id"],
+                json.dumps(metadata),
+                row["id"],
             )
     finally:
         await client.close()
 
     verb = "located" if write else "would locate"
-    print(f"\n{verb} {located} conversations."
-          + ("" if write else "  (dry run — pass --write to apply)"))
+    print(
+        f"\n{verb} {located} conversations."
+        + ("" if write else "  (dry run — pass --write to apply)")
+    )
     if write:
         now_stamped = await connection.fetchval(
             "SELECT count(*) FROM conversations WHERE conversation_metadata ? 'guild_id' "
@@ -167,8 +178,9 @@ async def backfill(environment: str, write: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env", required=True, choices=["dev", "prod"])
-    parser.add_argument("--write", action="store_true",
-                        help="actually write (default is a dry run)")
+    parser.add_argument(
+        "--write", action="store_true", help="actually write (default is a dry run)"
+    )
     arguments = parser.parse_args()
     asyncio.run(backfill(arguments.env, arguments.write))
 

@@ -3,7 +3,7 @@ import pytest
 import os
 import discord
 from unittest.mock import AsyncMock, Mock, patch
-from faediscord import Faebot, COMMAND_PREFIX, PROMPT_TEMPLATES, DEFAULT_TEMPLATE
+from faediscord import Faebot, COMMAND_PREFIX, PROMPT_TEMPLATES
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -90,7 +90,7 @@ class TestFaebot:
         assert isinstance(faebot.proxy_recent, dict)
         assert isinstance(faebot.recent_messages, dict)
         assert faebot.session is None
-        assert faebot.model == os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")
+        assert faebot.model == os.getenv("MODEL_NAME", "moonshotai/kimi-k2")
 
     @pytest.mark.asyncio
     async def test_on_ready(self, faebot):
