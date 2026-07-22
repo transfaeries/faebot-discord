@@ -167,6 +167,12 @@ async def show(environment: str, dm: bool) -> None:
         for channel in channels:
             by_group.setdefault(group_of(channel), []).append(channel)
 
+        # Rows whose location was never recorded (or was erased by a
+        # shutdown-save) get resolved down the guild chain by default. That
+        # is a GUESS, and for a DM it is the wrong one — so count them and
+        # say so rather than printing a confident wrong number.
+        unknown_location = 0
+
         def group_sort_key(item):
             group, members = item
             unresolved = group in (DM_GROUP, UNKNOWN_GROUP)
@@ -179,8 +185,16 @@ async def show(environment: str, dm: bool) -> None:
             print("─" * len(header))
             for channel in members:
                 # Per-channel DM resolution once recorded; --dm forces it for
-                # conversations that haven't healed yet.
-                is_dm = channel["is_dm"] if channel["is_dm"] is not None else dm
+                # conversations that haven't healed yet. When is_dm is NULL we
+                # are guessing: the DM chain and the guild chain give different
+                # answers, so a stale DM printed 0.05/default while the live bot
+                # was really using 1.00/dm (2026-07-21). The bot is never wrong
+                # here — it reads the live channel object every message; only
+                # this table can be. Mark the row instead of guessing quietly.
+                location_known = channel["is_dm"] is not None
+                is_dm = channel["is_dm"] if location_known else dm
+                if not location_known:
+                    unknown_location += 1
                 settings = await database.get_effective_settings(
                     channel["id"], is_dm=is_dm
                 )
@@ -189,8 +203,9 @@ async def show(environment: str, dm: bool) -> None:
                 for column in SETTINGS_COLUMNS:
                     mark = "*" if own.get(column) is not None else "·"
                     cells.append((mark, format_value(column, settings[column])))
+                name_cell = ("?" if not location_known else "") + channel["name"][:23]
                 print(
-                    f"{channel['name'][:23]:<24} {channel['id']:<20} "
+                    f"{name_cell:<24} {channel['id']:<20} "
                     f"{cells[0][0]}{cells[0][1][:21]:<21} "
                     f"{cells[1][0]}{cells[1][1]:>5} "
                     f"{cells[2][0]}{cells[2][1]:>4} "
@@ -215,6 +230,21 @@ async def show(environment: str, dm: bool) -> None:
         print(
             f"  resolution: {'DM (own → __default_dm__ → __default__)' if dm else 'guild (own → __default__)'}"
         )
+        if unknown_location:
+            print()
+            print(
+                f"  ? = location not recorded ({unknown_location} row(s)) — resolved "
+                "as a guild channel."
+            )
+            print(
+                "      If one of these is a DM, its freq/template above are WRONG. "
+                "The bot is\n"
+                "      right regardless; only this table is guessing. Fix: post one "
+                "message there\n"
+                "      (it self-heals), or run backfill_locations.py — or re-run with "
+                "--dm to\n"
+                "      resolve these down the DM chain instead."
+            )
         print()
     finally:
         await database.close()
@@ -346,6 +376,18 @@ async def write_setting(
 
         overrides = await load_overrides(database)
         own = overrides.get(conversation_id, {})
+        # bool(None) is False, so an unrecorded location silently resolves down
+        # the guild chain. Harmless for the WRITE (a column is a column), but
+        # the current/inherited values we quote back would be from the wrong
+        # chain — say so before the reader trusts them.
+        if channel and channel["is_dm"] is None:
+            print(
+                f"  ! location not recorded for {heading} — resolving as a guild "
+                "channel.\n"
+                "    If this is a DM, the current/inherited values below are wrong.\n"
+                "    Fix: post one message there, or run backfill_locations.py",
+                file=sys.stderr,
+            )
         is_dm = bool(channel["is_dm"]) if channel else conversation_id == DEFAULT_DM_ROW
         effective = await database.get_effective_settings(conversation_id, is_dm=is_dm)
 
