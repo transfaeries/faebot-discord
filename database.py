@@ -235,6 +235,14 @@ class FaebotDatabase:
                 "name": conversation_data["name"],
                 "conversants": conversation_data.get("conversants", {}),
             }
+            # Where this conversation LIVES (2026-07-20): guild id/name and
+            # whether it's a DM — identity, like the name, so it rides in the
+            # blob. Only written when known, because this write replaces the
+            # whole blob: a save from a path that never stamped them must not
+            # erase what an earlier stamped save recorded.
+            for location_key in ("guild_id", "guild_name", "is_dm"):
+                if conversation_data.get(location_key) is not None:
+                    metadata[location_key] = conversation_data[location_key]
             history = conversation_data.get("conversation", [])
 
             async with self.pool.acquire() as conn:
@@ -316,6 +324,11 @@ class FaebotDatabase:
                             "model": metadata.get(
                                 "model", "google/gemini-2.0-flash-001"
                             ),
+                            # Location, carried back into memory so a later
+                            # save doesn't drop what a previous one recorded.
+                            "guild_id": metadata.get("guild_id"),
+                            "guild_name": metadata.get("guild_name"),
+                            "is_dm": metadata.get("is_dm"),
                         }
                         successful += 1
                         logging.debug(
@@ -424,7 +437,10 @@ class FaebotDatabase:
                 logging.warning(
                     "⚠️ No value for '%s' in channel_settings (channel %s) — "
                     "using emergency default %r. The %s row may need fixing.",
-                    column, conversation_id, value, DEFAULT_ROW,
+                    column,
+                    conversation_id,
+                    value,
+                    DEFAULT_ROW,
                 )
             resolved[column] = value
 
@@ -442,7 +458,9 @@ class FaebotDatabase:
         if key not in SETTINGS_COLUMNS:
             raise ValueError(f"unknown setting {key!r}")
         if not self.pool:
-            logging.warning("No database pool — cannot set %s for %s", key, conversation_id)
+            logging.warning(
+                "No database pool — cannot set %s for %s", key, conversation_id
+            )
             return False
 
         async with self.pool.acquire() as conn:
@@ -456,9 +474,7 @@ class FaebotDatabase:
                 conversation_id,
                 value,
             )
-        logging.info(
-            "✅ channel_settings: %s.%s = %r", conversation_id, key, value
-        )
+        logging.info("✅ channel_settings: %s.%s = %r", conversation_id, key, value)
         return True
 
     @with_retry()

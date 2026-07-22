@@ -36,7 +36,9 @@ async def migrate():
         # Announce the target BEFORE acting — DATABASE_URL is trusted blindly,
         # and a mis-sourced environment once pointed a migration at the wrong
         # database (2026-07-06). Make the blast zone legible.
-        target = await conn.fetchrow("SELECT current_user AS usr, current_database() AS db")
+        target = await conn.fetchrow(
+            "SELECT current_user AS usr, current_database() AS db"
+        )
         logging.info(f"Target: {target['usr']} @ {target['db']}")
 
         exists = await conn.fetchval(
@@ -51,7 +53,9 @@ async def migrate():
             count = await conn.fetchval("SELECT COUNT(*) FROM bot_messages")
             logging.info(f"bot_messages exists with {count} rows — dropping")
             await conn.execute("DROP TABLE bot_messages")
-            logging.info(f"✅ bot_messages dropped ({count} rows retired; recoverable from dumps)")
+            logging.info(
+                f"✅ bot_messages dropped ({count} rows retired; recoverable from dumps)"
+            )
         else:
             logging.info("bot_messages does not exist — nothing to migrate")
 
