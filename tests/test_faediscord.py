@@ -4,6 +4,8 @@ import os
 import discord
 from unittest.mock import AsyncMock, Mock, patch
 from faediscord import Faebot, COMMAND_PREFIX, PROMPT_TEMPLATES
+from generation import Completion, GenerationFailed
+import capture
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -84,7 +86,6 @@ class TestFaebot:
     def test_init(self, faebot):
         """Test Faebot initialization"""
         assert isinstance(faebot.conversations, dict)
-        assert isinstance(faebot.retries, dict)
         assert isinstance(faebot.pending_responses, dict)
         assert isinstance(faebot.proxy_pending, dict)
         assert isinstance(faebot.proxy_recent, dict)
@@ -223,56 +224,124 @@ class TestFaebot:
             assert result is True
 
     @pytest.mark.asyncio
-    async def test_generate_ai_response_error(self, faebot):
-        """Test AI response generation error handling"""
-        conversation_id = "test_conv"
-        faebot.conversations[conversation_id] = {"prompt_template": "default"}
-        faebot.session = AsyncMock()
-        faebot.session.post.side_effect = Exception("API Error")
-
-        result = await faebot._generate_ai_response(
-            "test prompt", "test-model", conversation_id
-        )
-        assert "error" in result.lower()
-
-    @pytest.mark.asyncio
     async def test_generate_reply_success(self, faebot, mock_message):
-        """Test successful reply generation"""
+        """_generate_reply hands back the Completion from generation.generate"""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
             "prompt_template": "default",
             "model": "test-model",
             "conversation": [],
         }
-
-        with patch.object(faebot, "_generate_ai_response", return_value="test reply"):
+        faebot.session = Mock()
+        completion = Completion(text="test reply", reasoning="hm")
+        with patch("generation.generate", AsyncMock(return_value=completion)) as gen:
             result = await faebot._generate_reply(
                 "test prompt", mock_message, conversation_id
             )
-            assert result == "test reply"
-            assert faebot.retries.get(conversation_id, 0) == 0
+        assert result is completion
+        gen.assert_awaited_once_with(faebot.session, "test prompt", "test-model")
 
     @pytest.mark.asyncio
-    async def test_generate_reply_error_retry(self, faebot, mock_message):
-        """Test reply generation error and retry logic"""
+    async def test_generate_reply_failure_is_data_not_speech(
+        self, faebot, mock_message
+    ):
+        """A failed call is logged + captured as faebot_error; nothing is sent
+        and the history is left alone (no shrink-and-retry dance)."""
         conversation_id = str(mock_message.channel.id)
         faebot.conversations[conversation_id] = {
             "prompt_template": "default",
             "model": "test-model",
             "conversation": ["msg1", "msg2", "msg3", "msg4"],
         }
-        mock_message.channel.send = AsyncMock()
+        faebot.session = Mock()
+        failure = GenerationFailed("timed out", elapsed=120.0)
+        with patch("generation.generate", AsyncMock(side_effect=failure)):
+            with patch.object(capture, "record_faebot_error") as record_error:
+                result = await faebot._generate_reply(
+                    "test prompt", mock_message, conversation_id
+                )
+        assert result is None
+        mock_message.channel.send.assert_not_called()
+        assert len(faebot.conversations[conversation_id]["conversation"]) == 4
+        record_error.assert_called_once()
+        assert record_error.call_args.args[1] == "timed out"
+        assert record_error.call_args.kwargs["elapsed"] == 120.0
 
-        with patch.object(
-            faebot, "_generate_ai_response", side_effect=Exception("Test error")
-        ):
-            result = await faebot._generate_reply(
-                "test prompt", mock_message, conversation_id
-            )
-            assert result is None
-            assert (
-                len(faebot.conversations[conversation_id]["conversation"]) == 2
-            )  # Reduced by 2
+    @pytest.mark.asyncio
+    async def test_handle_conversation_pass_stays_quiet(self, faebot, mock_message):
+        """NOTHING-TO-SAY: nothing sent, the history records the choice, the
+        capture gets faebot_pass with the reason and the reasoning."""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {mock_message.author.name: mock_message.author.display_name},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        completion = Completion(
+            text="NOTHING-TO-SAY they're mid-thought", reasoning="r"
+        )
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(faebot, "_generate_reply", return_value=completion):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_pass") as record_pass:
+                            result = await faebot._handle_conversation(
+                                mock_message, conversation_id
+                            )
+
+        assert result is None
+        mock_message.channel.send.assert_not_called()
+        history = faebot.conversations[conversation_id]["conversation"]
+        assert len(history) == 1
+        assert history[0].startswith("[2024-01-01 12:00:00] ")
+        assert history[0].endswith(": *stays quiet*")
+        record_pass.assert_called_once()
+        assert record_pass.call_args.args[1] == "they're mid-thought"
+        assert record_pass.call_args.kwargs["reasoning"] == "r"
+        faebot.fdb.save_conversation.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_conversation_empty_says_nothing(self, faebot, mock_message):
+        """An empty answer channel after every roll is an error record, not speech."""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(
+                faebot, "_generate_reply", return_value=Completion(text="  ")
+            ):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_error") as record:
+                            await faebot._handle_conversation(
+                                mock_message, conversation_id
+                            )
+        mock_message.channel.send.assert_not_called()
+        assert faebot.conversations[conversation_id]["conversation"] == []
+        record.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handle_reply_message(self, faebot, mock_message):
@@ -388,7 +457,9 @@ class TestFaebot:
             raise asyncio.TimeoutError
 
         with patch.object(faebot, "_should_respond_to_message", return_value=True):
-            with patch.object(faebot, "_generate_reply", return_value="test response"):
+            with patch.object(
+                faebot, "_generate_reply", return_value=Completion(text="test response")
+            ):
                 with patch.object(
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
@@ -772,7 +843,9 @@ class TestFaebot:
             raise asyncio.TimeoutError
 
         with patch.object(faebot, "_should_respond_to_message", return_value=True):
-            with patch.object(faebot, "_generate_reply", return_value="test reply"):
+            with patch.object(
+                faebot, "_generate_reply", return_value=Completion(text="test reply")
+            ):
                 with patch.object(
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
@@ -823,7 +896,9 @@ class TestFaebot:
             return await coro
 
         with patch.object(faebot, "_should_respond_to_message", return_value=True):
-            with patch.object(faebot, "_generate_reply", return_value="hi ember!"):
+            with patch.object(
+                faebot, "_generate_reply", return_value=Completion(text="hi ember!")
+            ):
                 with patch.object(
                     faebot, "_send_typing_indicator", new_callable=AsyncMock
                 ):
