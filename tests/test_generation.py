@@ -138,6 +138,23 @@ class TestGenerate:
             == generation.GENERATION_CAP + generation.REASONING_CAP
         )
         assert "frequency_penalty" not in payload
+        assert payload["provider"] == {
+            "order": list(generation.PROVIDERS),
+            "allow_fallbacks": False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_pin_when_providers_empty(self):
+        session = FakeSession([openrouter("x")])
+        with patch("generation.PROVIDERS", ()):
+            await generation.generate(session, "p", "m")
+        assert "provider" not in session.calls[0]
+
+    def test_fit_message(self):
+        assert generation.fit_message("short") == "short"
+        long = "x" * 2500
+        cut = generation.fit_message(long)
+        assert len(cut) == 2000 and cut.endswith("–")
 
     @pytest.mark.asyncio
     async def test_empty_answer_rolls_again(self):

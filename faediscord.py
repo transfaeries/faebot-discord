@@ -718,6 +718,11 @@ class Faebot(discord.Client):
             return None
 
         reply = completion.text.strip()
+        if len(reply) > generation.MESSAGE_LIMIT:
+            logging.warning(
+                f"reply is {len(reply)} chars, over Discord's {generation.MESSAGE_LIMIT} — cutting it"
+            )
+            reply = generation.fit_message(reply)
         logging.info(
             f"received response in {completion.elapsed:.1f}s "
             f"(finish_reason={completion.finish_reason!r}, attempts={completion.attempts}): {reply}"

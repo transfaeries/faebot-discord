@@ -25,8 +25,23 @@ import aiohttp
 # investigate (`finish_reason == "length"`), not a design. The reasoning cap
 # rides ON TOP of the answer cap — sharing one purse lets deliberation eat the
 # reply.
-GENERATION_CAP = int(os.getenv("GENERATION_CAP", "250"))
+GENERATION_CAP = int(os.getenv("GENERATION_CAP", "600"))
 REASONING_CAP = int(os.getenv("REASONING_CAP", "8000"))
+
+# Discord refuses messages over 2000 characters. A reply that long is the
+# prompt failing, not a feature; it is cut rather than lost.
+MESSAGE_LIMIT = 2000
+
+# Provider pinning, for the prompt cache and for the reasoning channel: only
+# some OpenRouter providers cache the prompt (Modal and Moonshot did, on the
+# 08-21 stream; nine others never), and some serve kimi-k3 without reasoning
+# at all. Comma-separated OpenRouter provider slugs, tried in order, no
+# fallback to the field; empty = let OpenRouter route freely.
+PROVIDERS = tuple(
+    slug.strip()
+    for slug in os.getenv("OPENROUTER_PROVIDERS", "moonshotai,modal").split(",")
+    if slug.strip()
+)
 
 # Sampling is pinned to Moonshot's published defaults for kimi-k3. The old
 # gemini-era values (temperature 0.7, frequency_penalty 1.5) were never tuned
@@ -226,8 +241,20 @@ def _request(prompt: str, model: str, params: dict) -> tuple[str, dict, dict]:
             # Answer budget plus the reasoning's own room on top.
             "max_tokens": GENERATION_CAP + REASONING_CAP,
             "reasoning": {"max_tokens": REASONING_CAP},
+            **(
+                {"provider": {"order": list(PROVIDERS), "allow_fallbacks": False}}
+                if PROVIDERS
+                else {}
+            ),
         },
     )
+
+
+def fit_message(text: str, limit: int = MESSAGE_LIMIT) -> str:
+    """Cut a reply to what Discord will accept, marking the cut."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "–"
 
 
 def _parse(result: Any, model: str, elapsed: float) -> Completion:
