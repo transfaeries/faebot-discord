@@ -424,9 +424,18 @@ class TestFaebot:
         with patch.object(faebot, "_should_respond_to_message", return_value=False):
             await faebot.on_message(mock_message)
 
-            # Should have trimmed conversation and added new message
+            # Over the limit → cut back to the floor (69 - 69//5 = 56), in a
+            # block, so the prompt prefix stays put for the next dozen messages
             conv_length = len(faebot.conversations[conversation_id]["conversation"])
-            assert conv_length <= 70  # 69 + 1 new message, then trimmed
+            assert conv_length == 56
+            assert faebot.conversations[conversation_id]["conversation"][-1].endswith(
+                "test message"
+            )
+
+    def test_trim_is_a_no_op_under_the_limit(self, faebot):
+        faebot.conversations["c"] = {"conversation": ["a"] * 69, "history_length": 69}
+        faebot._trim_conversation_history("c")
+        assert len(faebot.conversations["c"]["conversation"]) == 69
 
     @pytest.mark.asyncio
     async def test_admin_command_prefix_detection(self, faebot, mock_message):
@@ -492,8 +501,11 @@ class TestFaebot:
         assert "Test Server" in rendered
         assert "test-channel" in rendered
         assert "Cool test topic" in rendered
-        assert "20" in rendered
+        assert "between the last 16 and 20 messages" in rendered
         assert "5%" in rendered
+        assert "{model}" not in rendered and "{silence}" not in rendered
+        assert "NOTHING-TO-SAY" in rendered
+        assert "KoboldCPP" not in rendered
 
     def test_render_prompt_dm_template(self, faebot, mock_message):
         """Test that DM template renders conversants"""

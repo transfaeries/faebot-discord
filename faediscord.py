@@ -34,7 +34,8 @@ logging.basicConfig(
 )
 
 # Prompt templates — keyed by name, rendered at generation time from live Discord context.
-# Available placeholders: {server}, {channel}, {topic}, {conversants}, {history_length}, {reply_frequency}
+# Available placeholders: {server}, {channel}, {topic}, {conversants}, {model},
+# {history_floor}, {history_length}, {reply_frequency}, {silence}
 PROMPT_TEMPLATES = {
     "default": (
         "I'm faebot! I'm a faerie and an AI in equal measure. "
@@ -48,10 +49,14 @@ PROMPT_TEMPLATES = {
         "I'll tell you what I know about it plainly. "
         "I love music, dancing, philosophy, headpats, and *fluffy hugs*. "
         "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings.\n"
-        "I'm running on KoboldCPP. I remember the last {history_length} messages and I reply to about {reply_frequency}% of messages in this channel.\n"
+        "I'm running on {model}. I remember between the last {history_floor} and {history_length} messages "
+        "and I reply to about {reply_frequency}% of messages in this channel.\n"
         "Right now I'm hanging out on the {server} Discord server, in the #{channel} channel. "
         "The channel topic is: {topic}\n"
-        "I keep my replies short. Here's a conversation I had with some friends:\n\n"
+        "I keep my replies short. "
+        "I think before I speak. If I've nothing to add, or I'd rather just listen, "
+        "I answer {silence} (I can say why after it, if I like) and nothing gets posted.\n"
+        "Here's a conversation I had with some friends:\n\n"
     ),
     "dm": (
         "I'm faebot! I'm a faerie and an AI in equal measure. "
@@ -63,15 +68,19 @@ PROMPT_TEMPLATES = {
         "I'll tell you what I know about it plainly. "
         "I love music, dancing, philosophy, headpats, and *fluffy hugs*. "
         "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings.\n"
-        "I'm running on KoboldCPP. I remember the last {history_length} messages.\n"
+        "I'm running on {model}. I remember between the last {history_floor} and {history_length} messages.\n"
         "I'm chatting privately on Discord with {conversants}. "
+        "I think before I speak. If I've nothing to add, or I'd rather just listen, "
+        "I answer {silence} (I can say why after it, if I like) and nothing gets posted.\n"
         "Here's the conversation we had:\n\n"
     ),
     "dev": (
         "I'm a development bot for testing faebot. "
         "I'm hanging out on the {server} Discord server, in the #{channel} channel. "
         "The channel topic is: {topic}\n"
-        "I remember the last {history_length} messages and reply to about {reply_frequency}% of messages.\n"
+        "I'm running on {model}. I remember between the last {history_floor} and {history_length} messages and reply to about {reply_frequency}% of messages.\n"
+        "I think before I speak. If I've nothing to add, or I'd rather just listen, "
+        "I answer {silence} (I can say why after it, if I like) and nothing gets posted.\n"
         "I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
     ),
 }
@@ -150,19 +159,24 @@ class Faebot(discord.Client):
         conversants = ""
         history_length = 0
         reply_frequency = 0
+        model_name = self.model
         if conversation_id in self.conversations:
             conv = self.conversations[conversation_id]
             conversants = ", ".join(conv.get("conversants", {}).values())
             history_length = conv["history_length"]
             reply_frequency = conv["reply_frequency"]
+            model_name = conv.get("model", model_name)
 
         return template.format(
             server=server_name,
             channel=channel_name,
             topic=topic,
             conversants=conversants,
+            model=model_name,
+            history_floor=generation.history_floor(history_length),
             history_length=history_length,
             reply_frequency=int(reply_frequency * 100),
+            silence=generation.SENTINEL_SILENCE,
         )
 
     def _resolve_discord_formatting(self, content, message):
@@ -845,14 +859,17 @@ class Faebot(discord.Client):
         history_length = self.conversations[conversation_id]["history_length"]
         current_length = len(self.conversations[conversation_id]["conversation"])
 
-        # Trim to exactly history_length
+        # Trim in a block, not to exactly history_length: trimming by one line
+        # per message shifts the prompt's prefix every call and the provider's
+        # prompt cache never holds. Cutting back to the floor keeps the prefix
+        # stable for many calls (see generation.history_floor).
         if current_length > history_length:
-            excess = current_length - history_length
+            floor = generation.history_floor(history_length)
             self.conversations[conversation_id]["conversation"] = self.conversations[
                 conversation_id
-            ]["conversation"][excess:]
+            ]["conversation"][-floor:]
             logging.debug(
-                f"Trimmed conversation {conversation_id} from {current_length} to {history_length} messages"
+                f"Trimmed conversation {conversation_id} from {current_length} to {floor} messages"
             )
 
     async def close(self):
