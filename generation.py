@@ -58,6 +58,13 @@ ATTEMPTS = int(os.getenv("GENERATION_ATTEMPTS", "2"))
 RETRY_DELAY = float(os.getenv("RETRY_DELAY", "5.0"))
 RATE_LIMIT_RETRY_DELAY = float(os.getenv("RATE_LIMIT_RETRY_DELAY", "1.0"))
 
+# An upstream drop (Moonshot's 504 — as an HTTP status, or inside a 200 body
+# as `{"error": {"code": 504}}`) never reaches the next pinned provider on
+# its own: OpenRouter walks the order only when a host is down at routing
+# time. So the one retry is re-aimed at the rest of the pinned list, never
+# outside it. A cold cache beats a lost ask.
+UPSTREAM_DROP_STATUSES = (502, 503, 504)
+
 # The answer channel coming back empty is a dropped payload (the model spoke
 # into `reasoning` and left the text blank), so we roll once more. Bounded:
 # resampling cures stochastic drops, never structural failures.
@@ -158,6 +165,10 @@ class GenerationFailed(Exception):
     def is_rate_limit(self) -> bool:
         return self.status == 429
 
+    @property
+    def is_upstream_drop(self) -> bool:
+        return self.status in UPSTREAM_DROP_STATUSES
+
 
 async def generate(
     session: aiohttp.ClientSession, prompt: str, model: str
@@ -181,16 +192,23 @@ async def generate(
 async def _generate_with_retry(
     session: aiohttp.ClientSession, prompt: str, model: str, params: dict
 ) -> Completion:
+    providers = PROVIDERS
     for attempt in range(1, ATTEMPTS + 1):
         try:
-            return await _generate_once(session, prompt, model, params)
+            return await _generate_once(session, prompt, model, params, providers)
         except GenerationFailed as failure:
             if attempt >= ATTEMPTS:
                 raise
-            delay = RATE_LIMIT_RETRY_DELAY if failure.is_rate_limit else RETRY_DELAY
+            if failure.is_upstream_drop and len(providers) > 1:
+                providers = providers[1:]
+                delay = RATE_LIMIT_RETRY_DELAY
+                aimed = f" on {','.join(providers)}"
+            else:
+                delay = RATE_LIMIT_RETRY_DELAY if failure.is_rate_limit else RETRY_DELAY
+                aimed = ""
             logging.warning(
                 f"generation failed ({failure.reason}) — retrying in {delay:g}s"
-                f" ({attempt}/{ATTEMPTS})"
+                f"{aimed} ({attempt}/{ATTEMPTS})"
             )
             await asyncio.sleep(delay)
     raise GenerationFailed("no attempts configured")  # ATTEMPTS < 1
@@ -203,8 +221,11 @@ def _koboldcpp_url() -> Optional[str]:
     return os.getenv("KOBOLDCPP_URL", "http://localhost:6666")
 
 
-def _request(prompt: str, model: str, params: dict) -> tuple[str, dict, dict]:
-    """(url, headers, payload) for one text-completion call."""
+def _request(
+    prompt: str, model: str, params: dict, providers: tuple[str, ...] = PROVIDERS
+) -> tuple[str, dict, dict]:
+    """(url, headers, payload) for one text-completion call; `providers` is
+    how a retry is aimed at the rest of the pinned list."""
     koboldcpp = _koboldcpp_url()
     if koboldcpp:
         return (
@@ -242,8 +263,8 @@ def _request(prompt: str, model: str, params: dict) -> tuple[str, dict, dict]:
             "max_tokens": GENERATION_CAP + REASONING_CAP,
             "reasoning": {"max_tokens": REASONING_CAP},
             **(
-                {"provider": {"order": list(PROVIDERS), "allow_fallbacks": False}}
-                if PROVIDERS
+                {"provider": {"order": list(providers), "allow_fallbacks": False}}
+                if providers
                 else {}
             ),
         },
@@ -271,7 +292,9 @@ def _parse(result: Any, model: str, elapsed: float) -> Completion:
         choice = result["choices"][0]
     except (KeyError, IndexError, TypeError):
         raise GenerationFailed(
-            f"OpenRouter returned no choices: {str(result)[:200]}", elapsed
+            f"OpenRouter returned no choices: {str(result)[:200]}",
+            elapsed,
+            status=_body_error_code(result),
         ) from None
     return Completion(
         text=str(choice.get("text") or ""),
@@ -284,12 +307,26 @@ def _parse(result: Any, model: str, elapsed: float) -> Completion:
     )
 
 
+def _body_error_code(result: Any) -> Optional[int]:
+    """OpenRouter can answer 200 with `{"error": {"code": 504, ...}}` — the
+    upstream's status, carried in the body. Surface it so policy can see it."""
+    if isinstance(result, dict):
+        error = result.get("error")
+        if isinstance(error, dict) and isinstance(error.get("code"), int):
+            return int(error["code"])
+    return None
+
+
 async def _generate_once(
-    session: aiohttp.ClientSession, prompt: str, model: str, params: dict
+    session: aiohttp.ClientSession,
+    prompt: str,
+    model: str,
+    params: dict,
+    providers: tuple[str, ...] = PROVIDERS,
 ) -> Completion:
     """One text-completion call. One attempt, real timeout; any failure raises
     GenerationFailed. Retry policy lives in the caller."""
-    url, headers, payload = _request(prompt, model, params)
+    url, headers, payload = _request(prompt, model, params, providers)
     started = time.monotonic()
     try:
         async with session.post(

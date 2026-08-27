@@ -186,6 +186,26 @@ class TestGenerate:
         assert len(session.calls) == 2
 
     @pytest.mark.asyncio
+    async def test_an_upstream_drop_re_aims_the_retry(self, monkeypatch):
+        """A 504 — as a status or inside a 200 body — retries on the rest of
+        the pinned list, never outside it."""
+        monkeypatch.setattr(generation, "PROVIDERS", ("moonshotai", "modal"))
+        monkeypatch.setattr(generation, "RATE_LIMIT_RETRY_DELAY", 0)
+        session = FakeSession(
+            [
+                FakeResponse(body={"error": {"code": 504, "message": "aborted"}}),
+                openrouter("ok"),
+            ]
+        )
+        completion = await generation.generate(session, "p", "m")
+        assert completion.text == "ok"
+        assert session.calls[0]["provider"]["order"] == ["moonshotai", "modal"]
+        assert session.calls[1]["provider"] == {
+            "order": ["modal"],
+            "allow_fallbacks": False,
+        }
+
+    @pytest.mark.asyncio
     async def test_no_choices_is_a_failure(self):
         session = FakeSession([FakeResponse(body={"error": "x"})] * 2)
         with pytest.raises(GenerationFailed):
