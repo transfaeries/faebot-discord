@@ -280,17 +280,12 @@ def record_member(member: Any, action: str) -> None:
         logging.debug("capture member failed: %s: %s", type(error).__name__, error)
 
 
-def record_faebot_message(
-    sent_message: Any,
-    conversation_id: str,
-    prompt: str,
-    model: str,
-    context: Any,
-) -> None:
+def record_faebot_message(sent_message: Any, **meta: Any) -> None:
     """faebot's own generated reply, captured at the send point — the only place
     faer INTERNAL metadata exists (the prompt that produced it, the model, the
-    context). The gateway echo of the same message is captured separately by
-    record_message; the two views link offline by message id."""
+    context, the reasoning channel, latency). The gateway echo of the same
+    message is captured separately by record_message; the two views link
+    offline by message id."""
     if not is_enabled():
         return
     try:
@@ -300,16 +295,46 @@ def record_faebot_message(
                 "message_id": getattr(sent_message, "id", None),
                 "channel": serialize_channel(getattr(sent_message, "channel", None)),
                 "content": getattr(sent_message, "content", None),
-                "conversation_id": conversation_id,
-                "prompt": prompt,
-                "model": model,
-                "context": context,
+                **meta,
             },
         )
     except Exception as error:
         logging.debug(
             "capture faebot_message failed: %s: %s", type(error).__name__, error
         )
+
+
+def record_faebot_pass(channel: Any, reason: str, **meta: Any) -> None:
+    """faebot choosing silence — a generation that ended in the silence
+    sentinel, so nothing was posted. Its own kind, because "thought about it
+    and stayed quiet" is a real act, distinct from both a message and an
+    absence; `reason` is what fae said after the sentinel (may be empty) and
+    `meta` carries the reasoning channel like record_faebot_message does."""
+    if not is_enabled():
+        return
+    try:
+        record(
+            "faebot_pass",
+            {"channel": serialize_channel(channel), "reason": reason, **meta},
+        )
+    except Exception as error:
+        logging.debug("capture faebot_pass failed: %s: %s", type(error).__name__, error)
+
+
+def record_faebot_error(channel: Any, error: str, **meta: Any) -> None:
+    """A generation that FAILED after faebot was asked — the service timed
+    out, refused, or was unreachable — and nothing was posted. Not faebot's
+    act (fae never got to answer) but part of what happened in the room, and
+    a data point (`elapsed` rides in `meta`)."""
+    if not is_enabled():
+        return
+    try:
+        record(
+            "faebot_error",
+            {"channel": serialize_channel(channel), "error": error, **meta},
+        )
+    except Exception as err:
+        logging.debug("capture faebot_error failed: %s: %s", type(err).__name__, err)
 
 
 def record_socket_raw(frame: Any) -> None:

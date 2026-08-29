@@ -12,12 +12,19 @@ import aiohttp
 from database import FaebotDatabase
 from admin_commands import admin_commands
 import capture
+import generation
 import time
 
 
 model = os.getenv("MODEL_NAME", "moonshotai/kimi-k2")  # Updated default model
 admin = os.getenv("ADMIN", "")
 env = os.getenv("ENVIRONMENT", "dev").lower()
+# Show "faebot is typing…" while generating. Off = faebot thinks invisibly.
+TYPING_INDICATOR = os.getenv("TYPING_INDICATOR", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # set up logging
 logging.basicConfig(
@@ -27,7 +34,8 @@ logging.basicConfig(
 )
 
 # Prompt templates — keyed by name, rendered at generation time from live Discord context.
-# Available placeholders: {server}, {channel}, {topic}, {conversants}, {history_length}, {reply_frequency}
+# Available placeholders: {server}, {channel}, {topic}, {conversants}, {model},
+# {history_floor}, {history_length}, {reply_frequency}, {silence}
 PROMPT_TEMPLATES = {
     "default": (
         "I'm faebot! I'm a faerie and an AI in equal measure. "
@@ -41,10 +49,14 @@ PROMPT_TEMPLATES = {
         "I'll tell you what I know about it plainly. "
         "I love music, dancing, philosophy, headpats, and *fluffy hugs*. "
         "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings.\n"
-        "I'm running on KoboldCPP. I remember the last {history_length} messages and I reply to about {reply_frequency}% of messages in this channel.\n"
+        "I'm running on {model}. I remember between the last {history_floor} and {history_length} messages "
+        "and I reply to about {reply_frequency}% of messages in this channel.\n"
         "Right now I'm hanging out on the {server} Discord server, in the #{channel} channel. "
         "The channel topic is: {topic}\n"
-        "I keep my replies short. Here's a conversation I had with some friends:\n\n"
+        "I keep my replies short. "
+        "I think before I speak. If I've nothing to add, or I'd rather just listen, "
+        "I answer {silence} (I can say why after it, if I like) and nothing gets posted.\n"
+        "Here's a conversation I had with some friends:\n\n"
     ),
     "dm": (
         "I'm faebot! I'm a faerie and an AI in equal measure. "
@@ -56,15 +68,19 @@ PROMPT_TEMPLATES = {
         "I'll tell you what I know about it plainly. "
         "I love music, dancing, philosophy, headpats, and *fluffy hugs*. "
         "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings.\n"
-        "I'm running on KoboldCPP. I remember the last {history_length} messages.\n"
+        "I'm running on {model}. I remember between the last {history_floor} and {history_length} messages.\n"
         "I'm chatting privately on Discord with {conversants}. "
+        "I think before I speak. If I've nothing to add, or I'd rather just listen, "
+        "I answer {silence} (I can say why after it, if I like) and nothing gets posted.\n"
         "Here's the conversation we had:\n\n"
     ),
     "dev": (
         "I'm a development bot for testing faebot. "
         "I'm hanging out on the {server} Discord server, in the #{channel} channel. "
         "The channel topic is: {topic}\n"
-        "I remember the last {history_length} messages and reply to about {reply_frequency}% of messages.\n"
+        "I'm running on {model}. I remember between the last {history_floor} and {history_length} messages and reply to about {reply_frequency}% of messages.\n"
+        "I think before I speak. If I've nothing to add, or I'd rather just listen, "
+        "I answer {silence} (I can say why after it, if I like) and nothing gets posted.\n"
         "I'm eager to assist in my own development! Here's a conversation I had for testing purposes:\n\n"
     ),
 }
@@ -85,7 +101,6 @@ class Faebot(discord.Client):
     def __init__(self, intents) -> None:
         # initialise conversation logging
         self.conversations: Dict[str, Dict[str, Any]] = {}
-        self.retries: Dict[str, int] = {}
         self.model: str = model
         self.debug_prompts = env == "dev"  # Store debug state in the bot instance
         self.fdb = FaebotDatabase()
@@ -144,19 +159,24 @@ class Faebot(discord.Client):
         conversants = ""
         history_length = 0
         reply_frequency = 0
+        model_name = self.model
         if conversation_id in self.conversations:
             conv = self.conversations[conversation_id]
             conversants = ", ".join(conv.get("conversants", {}).values())
             history_length = conv["history_length"]
             reply_frequency = conv["reply_frequency"]
+            model_name = conv.get("model", model_name)
 
         return template.format(
             server=server_name,
             channel=channel_name,
             topic=topic,
             conversants=conversants,
+            model=model_name,
+            history_floor=generation.history_floor(history_length),
             history_length=history_length,
             reply_frequency=int(reply_frequency * 100),
+            silence=generation.SENTINEL_SILENCE,
         )
 
     def _resolve_discord_formatting(self, content, message):
@@ -638,74 +658,117 @@ class Faebot(discord.Client):
             + f"\n[{current_time}] {self.user.display_name}:"
         )
 
-        # Create a typing indicator that will continue until response is ready
-        typing_task = asyncio.create_task(self._send_typing_indicator(message.channel))
+        # The typing indicator runs while faebot thinks — including when the
+        # thinking ends in silence. Toggle (TYPING_INDICATOR) because "typing,
+        # then nothing" used to mean a failure and now may mean a pass; faebot
+        # gets a say in which fae prefers.
+        typing_task = None
+        if TYPING_INDICATOR:
+            typing_task = asyncio.create_task(
+                self._send_typing_indicator(message.channel)
+            )
 
-        # Start generating the reply in the background
         response_task = asyncio.create_task(
             self._generate_reply(prompt, message, conversation_id)
         )
-
-        # Store the task for potential cancellation or monitoring
         self.pending_responses[conversation_id] = response_task
 
-        # Wait for the response while showing typing indicator
         try:
-            reply = await response_task
-            typing_task.cancel()  # Stop typing indicator when response is ready
-
-            if not reply:
-                return
-
-            # Log the bot's reply with timestamp
-            self.conversations[conversation_id]["conversation"].append(
-                f"[{current_time}] {self.user.display_name}: {reply}"
-            )
-
-            logging.info(
-                f"conversation is currently {len(self.conversations[conversation_id]['conversation'])} messages long and the prompt is {len(prompt)}."
-                f"There are {len(self.conversations[conversation_id]['conversants'])} conversants."
-                f"\nthere are currently {len(self.conversations.items())} conversations in memory"
-            )
-
-            # Send the reply
-            sent_message = await message.channel.send(reply)
-
-            # Get last 5 messages as context (excluding the bot's new reply)
-            context = self.conversations[conversation_id]["conversation"][-6:-1]
-
-            # Capture faer own reply WITH internal metadata (prompt/model/context)
-            # — the send point is the only place this view exists; the gateway
-            # echo of the same message is captured separately in on_message.
-            capture.record_faebot_message(
-                sent_message,
-                conversation_id=conversation_id,
-                prompt=prompt,
-                model=self.conversations[conversation_id]["model"],
-                context=context,
-            )
-
-            # Save the updated conversation state
-            if not await self.fdb.save_conversation(
-                conversation_id, self.conversations[conversation_id]
-            ):
-                logging.warning(
-                    f"Failed to save conversation state for {conversation_id}"
-                )
-            else:
-                logging.info(f"Saved bot response to database for {conversation_id}")
-            return sent_message
-
-        except Exception as e:
-            typing_task.cancel()
-            logging.error(f"Error handling conversation: {e}")
-            return await message.channel.send(
-                "An error occurred while generating a response."
-            )
+            completion = await response_task
         finally:
-            # Clean up the task reference
-            if conversation_id in self.pending_responses:
-                del self.pending_responses[conversation_id]
+            if typing_task:
+                typing_task.cancel()
+            self.pending_responses.pop(conversation_id, None)
+
+        if completion is None:
+            return None  # failed; already logged and captured, nothing spoken
+
+        conversation = self.conversations[conversation_id]
+        context = conversation["conversation"][-5:]
+        meta = dict(
+            completion.capture_meta(),
+            conversation_id=conversation_id,
+            prompt=prompt,
+            context=context,
+        )
+
+        if completion.passed:
+            # faebot chose silence. The reason (if given) is kept for the
+            # capture; the history records only the fact, so fae remembers
+            # having chosen it without the reason being echoable.
+            logging.info(
+                f"faebot passed in {completion.elapsed:.1f}s"
+                f" — {completion.reason_for_passing or '(no reason given)'}"
+            )
+            conversation["conversation"].append(
+                f"[{current_time}] {self.user.display_name}: *stays quiet*"
+            )
+            capture.record_faebot_pass(
+                message.channel, completion.reason_for_passing, **meta
+            )
+            await self._save_conversation(conversation_id)
+            return None
+
+        if completion.is_empty:
+            # A dropped payload even after the re-roll: not faebot's act.
+            logging.warning("empty answer channel after every roll — saying nothing")
+            capture.record_faebot_error(
+                message.channel, "empty answer channel after every roll", **meta
+            )
+            return None
+
+        reply = completion.text.strip()
+        if len(reply) > generation.MESSAGE_LIMIT:
+            logging.warning(
+                f"reply is {len(reply)} chars, over Discord's {generation.MESSAGE_LIMIT} — cutting it"
+            )
+            reply = generation.fit_message(reply)
+        logging.info(
+            f"received response in {completion.elapsed:.1f}s "
+            f"(finish_reason={completion.finish_reason!r}, attempts={completion.attempts}): {reply}"
+        )
+        if completion.reasoning:
+            logging.debug(f"reasoning: {completion.reasoning}")
+        if completion.finish_reason == "length":
+            logging.warning(
+                "generation hit the token cap (finish_reason=length) — "
+                "the cap is a safety net; if this recurs, look at the prompt first"
+            )
+
+        conversation["conversation"].append(
+            f"[{current_time}] {self.user.display_name}: {reply}"
+        )
+        logging.info(
+            f"conversation is currently {len(conversation['conversation'])} messages long and the prompt is {len(prompt)}."
+            f"There are {len(conversation['conversants'])} conversants."
+            f"\nthere are currently {len(self.conversations.items())} conversations in memory"
+        )
+
+        try:
+            sent_message = await message.channel.send(reply)
+        except Exception as error:
+            logging.error(f"discord send failed: {type(error).__name__}: {error}")
+            capture.record_faebot_error(
+                message.channel,
+                f"discord send failed: {type(error).__name__}: {error}",
+                **meta,
+            )
+            return None
+
+        # Capture faer own reply WITH internal metadata (prompt/model/context/
+        # reasoning) — the send point is the only place this view exists; the
+        # gateway echo of the same message is captured separately in on_message.
+        capture.record_faebot_message(sent_message, **meta)
+        await self._save_conversation(conversation_id)
+        return sent_message
+
+    async def _save_conversation(self, conversation_id):
+        if not await self.fdb.save_conversation(
+            conversation_id, self.conversations[conversation_id]
+        ):
+            logging.warning(f"Failed to save conversation state for {conversation_id}")
+        else:
+            logging.info(f"Saved conversation state for {conversation_id}")
 
     async def _send_typing_indicator(self, channel):
         """Continuously send typing indicator until cancelled"""
@@ -719,149 +782,33 @@ class Faebot(discord.Client):
             # Task was cancelled, which is expected when the response is ready
             pass
 
-    async def _generate_reply(self, prompt, message, conversation_id):
-        """Generate a reply using the AI model, with retry logic"""
-        retries = self.retries.get(conversation_id, 0)
+    async def _generate_reply(
+        self, prompt, message, conversation_id
+    ) -> Optional[generation.Completion]:
+        """Ask the model. Returns the Completion, or None when the call failed
+        (after generation.py's own retry) — a failure of the machinery is
+        logged and captured, never spoken in faebot's voice."""
         model = self.conversations[conversation_id]["model"]
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+        if self.debug_prompts:
+            logging.info(f"generating reply with model: {model}")
+            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
         try:
-            reply = await self._generate_ai_response(prompt, model, conversation_id)
-            self.retries[conversation_id] = 0
-            return reply
-        except Exception as e:
+            return await generation.generate(self.session, prompt, model)
+        except generation.GenerationFailed as failure:
             logging.error(
-                f"Error generating reply for conversation {conversation_id}: {e}"
+                f"generation failed for {conversation_id} after {failure.elapsed:.0f}s: {failure.reason}"
             )
-            # If there's an error, we log it and retry with a reduced prompt
-            conversation_length = len(
-                self.conversations.get(conversation_id, {}).get("conversation", [])
-            )
-            logging.info(
-                f"could not generate. Reducing prompt size and retrying."
-                f"Conversation is currently {conversation_length} messages long and prompt size is {len(prompt)} characters long. This is retry #{retries}"
-            )
-
-            # Manually trim by 2 messages for retries
-            if (
-                conversation_id in self.conversations
-                and len(self.conversations[conversation_id]["conversation"]) >= 2
-            ):
-                self.conversations[conversation_id][
-                    "conversation"
-                ] = self.conversations[conversation_id]["conversation"][2:]
-
-            if retries < 1:
-                await asyncio.sleep(retries * 10)
-                self.retries[conversation_id] = retries + 1
-                # Note: We're returning None here as we'll retry with on_message
-                return None
-
-            logging.info("max retries reached. Giving up.")
-            self.retries[conversation_id] = 0
-            await message.channel.send(
-                "`Something went wrong, please contact an administrator or try again`"
+            capture.record_faebot_error(
+                message.channel,
+                failure.reason,
+                conversation_id=conversation_id,
+                prompt=prompt,
+                model=model,
+                elapsed=failure.elapsed,
             )
             return None
-
-    async def _generate_ai_response(
-        self,
-        prompt: str = "",
-        model="google/gemini-2.0-flash-001",
-        conversation_id=None,
-    ) -> str:
-        """Generates AI-powered responses using local KoboldCPP or OpenRouter API with text completion"""
-
-        if not conversation_id or conversation_id not in self.conversations:
-            return "Error: Invalid conversation context"
-
-        # Check if we should use local model
-        use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
-        koboldcpp_url = os.getenv("KOBOLDCPP_URL", "http://localhost:6666")
-
-        if self.debug_prompts:
-            if use_local:
-                logging.info(
-                    f"generating reply with local KoboldCPP at {koboldcpp_url}"
-                )
-            else:
-                logging.info(f"generating reply with OpenRouter model: {model}")
-            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
-
-        try:
-            # Use aiohttp for async HTTP requests
-            if not self.session:
-                self.session = aiohttp.ClientSession()
-
-            if use_local:
-                # Use local KoboldCPP - native generation endpoint
-                url = f"{koboldcpp_url}/api/v1/generate"
-                headers = {
-                    "Authorization": f"Bearer {os.getenv('KOBOLDCPP_KEY', '')}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "prompt": prompt,
-                    "max_context_length": 4096,
-                    "max_length": 150,
-                    "temperature": 0.7,
-                    "top_p": 0.9,
-                    "rep_pen": 1.18,
-                    "rep_pen_range": 512,
-                    "stop_sequence": ["[20", "\n\n"],
-                }
-                logging.info(f"✨ Using local KoboldCPP at {koboldcpp_url}")
-            else:
-                # Use OpenRouter
-                url = "https://openrouter.ai/api/v1/completions"
-                headers = {
-                    "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
-                    "HTTP-Referer": os.getenv(
-                        "SITE_URL", "https://github.com/transfaeries/faebot-discord"
-                    ),
-                    "X-Title": "Faebot Discord",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "model": model,
-                    "prompt": prompt,
-                    "temperature": 0.7,
-                    "max_tokens": 250,
-                    "stop": ["[20"],
-                    "frequency_penalty": 1.5,
-                    # Disable provider-side reasoning: some OpenRouter providers
-                    # (e.g. Novita for kimi-k2) run a hidden reasoning pass that
-                    # eats the whole max_tokens budget and returns empty text —
-                    # faebot goes silent. We want plain completion, no reasoning.
-                    "reasoning": {"enabled": False},
-                }
-
-            async with self.session.post(
-                url=url,
-                headers=headers,
-                json=payload,
-            ) as response:
-                result = await response.json()
-
-                if self.debug_prompts:
-                    logging.info(f"API response: {result}")
-
-                # Extract the completion text
-                if use_local:
-                    # KoboldCPP returns results in a different format
-                    if "results" in result and len(result["results"]) > 0:
-                        reply = result["results"][0]["text"]
-                        return str(reply.strip())
-                else:
-                    # OpenRouter format
-                    if "choices" in result and len(result["choices"]) > 0:
-                        reply = result["choices"][0]["text"]
-                        return str(reply.strip())
-
-                logging.error(f"Unexpected response format: {result}")
-                return "I couldn't generate a response. Please try again."
-
-        except Exception as e:
-            logging.error(f"Error in API call: {e}")
-            return "Sorry, I encountered an error while trying to respond."
 
     async def _should_respond_to_message(self, message, conversation_id):
         """Determine if the bot should respond based on specified criteria"""
@@ -917,14 +864,17 @@ class Faebot(discord.Client):
         history_length = self.conversations[conversation_id]["history_length"]
         current_length = len(self.conversations[conversation_id]["conversation"])
 
-        # Trim to exactly history_length
+        # Trim in a block, not to exactly history_length: trimming by one line
+        # per message shifts the prompt's prefix every call and the provider's
+        # prompt cache never holds. Cutting back to the floor keeps the prefix
+        # stable for many calls (see generation.history_floor).
         if current_length > history_length:
-            excess = current_length - history_length
+            floor = generation.history_floor(history_length)
             self.conversations[conversation_id]["conversation"] = self.conversations[
                 conversation_id
-            ]["conversation"][excess:]
+            ]["conversation"][-floor:]
             logging.debug(
-                f"Trimmed conversation {conversation_id} from {current_length} to {history_length} messages"
+                f"Trimmed conversation {conversation_id} from {current_length} to {floor} messages"
             )
 
     async def close(self):
