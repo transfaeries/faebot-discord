@@ -62,7 +62,8 @@ RATE_LIMIT_RETRY_DELAY = float(os.getenv("RATE_LIMIT_RETRY_DELAY", "1.0"))
 # as `{"error": {"code": 504}}`) never reaches the next pinned provider on
 # its own: OpenRouter walks the order only when a host is down at routing
 # time. So the one retry is re-aimed at the rest of the pinned list, never
-# outside it. A cold cache beats a lost ask.
+# outside it. A cold cache beats a lost ask. A 429 is re-aimed the same way:
+# the shared pool that just said no is the pool a same-list retry asks again.
 UPSTREAM_DROP_STATUSES = (502, 503, 504)
 
 # The answer channel coming back empty is a dropped payload (the model spoke
@@ -199,13 +200,13 @@ async def _generate_with_retry(
         except GenerationFailed as failure:
             if attempt >= ATTEMPTS:
                 raise
-            if failure.is_upstream_drop and len(providers) > 1:
+            re_aim = failure.is_upstream_drop or failure.is_rate_limit
+            if re_aim and len(providers) > 1:
                 providers = providers[1:]
-                delay = RATE_LIMIT_RETRY_DELAY
                 aimed = f" on {','.join(providers)}"
             else:
-                delay = RATE_LIMIT_RETRY_DELAY if failure.is_rate_limit else RETRY_DELAY
                 aimed = ""
+            delay = RATE_LIMIT_RETRY_DELAY if re_aim else RETRY_DELAY
             logging.warning(
                 f"generation failed ({failure.reason}) — retrying in {delay:g}s"
                 f"{aimed} ({attempt}/{ATTEMPTS})"

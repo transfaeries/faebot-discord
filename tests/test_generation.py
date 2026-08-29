@@ -206,6 +206,35 @@ class TestGenerate:
         }
 
     @pytest.mark.asyncio
+    async def test_a_429_re_aims_the_retry_too(self, monkeypatch):
+        """The shared pool that said no is the one a same-list retry asks
+        again (the 08-27 stream lost five asks that way): a 429 retries on
+        the rest of the pinned list, after the short pause."""
+        monkeypatch.setattr(generation, "PROVIDERS", ("moonshotai", "modal"))
+        monkeypatch.setattr(generation, "RATE_LIMIT_RETRY_DELAY", 0)
+        session = FakeSession(
+            [FakeResponse(status=429, body={"error": "rate limited"}), openrouter("ok")]
+        )
+        completion = await generation.generate(session, "p", "m")
+        assert completion.text == "ok"
+        assert session.calls[0]["provider"]["order"] == ["moonshotai", "modal"]
+        assert session.calls[1]["provider"] == {
+            "order": ["modal"],
+            "allow_fallbacks": False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_429_with_one_pinned_provider_retries_it(self, monkeypatch):
+        monkeypatch.setattr(generation, "PROVIDERS", ("moonshotai",))
+        monkeypatch.setattr(generation, "RATE_LIMIT_RETRY_DELAY", 0)
+        session = FakeSession(
+            [FakeResponse(status=429, body={"error": "rate limited"}), openrouter("ok")]
+        )
+        completion = await generation.generate(session, "p", "m")
+        assert completion.text == "ok"
+        assert [c["provider"]["order"] for c in session.calls] == [["moonshotai"]] * 2
+
+    @pytest.mark.asyncio
     async def test_no_choices_is_a_failure(self):
         session = FakeSession([FakeResponse(body={"error": "x"})] * 2)
         with pytest.raises(GenerationFailed):
