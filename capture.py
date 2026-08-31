@@ -153,6 +153,24 @@ def serialize_message(message: Any) -> Dict[str, Any]:
         "reply_to": getattr(message.reference, "message_id", None)
         if message.reference
         else None,
+        # A quote is a fresh perception: the resolved reference arrives from
+        # Discord with today's fields, so a quoted image re-arrives described
+        # even when its original row predates the alt-text sense (or the
+        # corpus). Serialized only when Discord resolved it — absent
+        # otherwise, never guessed.
+        "reply_to_attachments": [
+            {
+                "filename": attachment.filename,
+                "content_type": attachment.content_type,
+                "description": attachment.description,
+            }
+            for attachment in getattr(
+                getattr(message.reference, "resolved", None), "attachments", []
+            )
+            or []
+        ]
+        if message.reference
+        else None,
         "mentions": [user.id for user in message.mentions],
         "role_mentions": [role.id for role in message.role_mentions],
         "channel_mentions": [channel.id for channel in message.channel_mentions],

@@ -78,6 +78,7 @@ class TestFaebot:
         message.reference = None
         message.mentions = []
         message.role_mentions = []
+        message.attachments = []
         message.channel_mentions = []
         message.webhook_id = None
         message.id = 111111111111111111
@@ -362,6 +363,7 @@ class TestFaebot:
         ref_msg.created_at.strftime.return_value = "2024-01-01 11:59:00"
         ref_msg.mentions = []
         ref_msg.role_mentions = []
+        ref_msg.attachments = []
         ref_msg.channel_mentions = []
 
         mock_message.reference = Mock()
@@ -532,6 +534,7 @@ class TestFaebot:
         user2.display_name = "Aisling"
         message.mentions = [user1, user2]
         message.role_mentions = []
+        message.attachments = []
         message.channel_mentions = []
 
         content = "hey <@882358999830364212> and <@!123456789012345678> what's up"
@@ -544,6 +547,7 @@ class TestFaebot:
         message = Mock()
         message.mentions = []
         message.role_mentions = []
+        message.attachments = []
         message.channel_mentions = []
 
         content = "love this <:faebotyay:1465010932068519999> so much <a:danceparty:9876543210>"
@@ -577,6 +581,7 @@ class TestFaebot:
         user.display_name = "Ember"
         message.mentions = [user]
         message.role_mentions = []
+        message.attachments = []
         message.channel_mentions = []
 
         content = "<@882358999830364212> look at this <:sparkle:123456> in the chat"
@@ -694,6 +699,7 @@ class TestFaebot:
         proxy_msg.content = "hello brownie-dev!"
         proxy_msg.mentions = []
         proxy_msg.role_mentions = []
+        proxy_msg.attachments = []
         proxy_msg.channel_mentions = []
 
         faebot._swap_history_for_proxy(
@@ -819,6 +825,7 @@ class TestFaebot:
         mention_user.display_name = "brownie-dev"
         mock_message.mentions = [mention_user]
         mock_message.role_mentions = []
+        mock_message.attachments = []
         mock_message.channel_mentions = []
 
         with patch.object(
@@ -895,6 +902,7 @@ class TestFaebot:
         proxy_msg.created_at.strftime.return_value = "2024-01-01 12:00:01"
         proxy_msg.mentions = []
         proxy_msg.role_mentions = []
+        proxy_msg.attachments = []
         proxy_msg.channel_mentions = []
         proxy_msg.reference = None
         proxy_msg.guild = mock_message.guild
@@ -918,3 +926,97 @@ class TestFaebot:
                         await faebot._handle_conversation(mock_message, conversation_id)
 
         mock_message.channel.send.assert_called_once_with("hi ember!")
+
+
+class TestLiveSenses:
+    """The small senses on the speaking surface — attachments described (or
+    their holes labeled) and reactions entering history as labeled lines."""
+
+    @pytest.fixture
+    def faebot(self, request):
+        intents = Mock()
+        intents.message_content = True
+        with patch("discord.Client.__init__", return_value=None):
+            bot = Faebot(intents)
+            bot._connection = Mock()
+            bot.fdb = Mock()
+            return bot
+
+    def _attachment(self, **overrides):
+        attachment = Mock()
+        attachment.filename = "photo.png"
+        attachment.content_type = "image/png"
+        attachment.description = None
+        for key, value in overrides.items():
+            setattr(attachment, key, value)
+        return attachment
+
+    def test_described_image_renders_the_authors_words(self, faebot):
+        note = faebot._describe_attachments(
+            [self._attachment(description="a cat on a windowsill")]
+        )
+        assert note == '[attachment: photo.png — "a cat on a windowsill"]'
+
+    def test_undescribed_image_gets_the_labeled_hole(self, faebot):
+        note = faebot._describe_attachments([self._attachment()])
+        assert note == "[attachment: photo.png — an image, no description offered]"
+
+    def test_non_media_files_stay_filenames(self, faebot):
+        note = faebot._describe_attachments(
+            [self._attachment(filename="script.py", content_type="text/x-python")]
+        )
+        assert note == "[attachment: script.py]"
+
+    def test_with_attachments_composes_and_strips(self, faebot):
+        message = Mock()
+        message.attachments = [self._attachment()]
+        assert faebot._with_attachments("", message).startswith("[attachment:")
+        message.attachments = []
+        assert faebot._with_attachments("just words", message) == "just words"
+
+    def _reaction_payload(self, member=None):
+        payload = Mock()
+        payload.channel_id = 777
+        payload.message_id = 555
+        payload.user_id = 42
+        payload.emoji = "✨"
+        payload.member = member
+        return payload
+
+    def test_a_reaction_enters_history_with_name_and_stub(self, faebot):
+        faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
+        member = Mock()
+        member.display_name = "Berry"
+        target = Mock()
+        target.id = 555
+        target.content = "the longest riddle anyone has ever posed in this channel"
+        target.mentions = []
+        target.role_mentions = []
+        target.attachments = []
+        target.channel_mentions = []
+        with patch.object(
+            type(faebot),
+            "cached_messages",
+            new_callable=lambda: property(lambda self: [target]),
+        ):
+            faebot._log_reaction(self._reaction_payload(member=member), removed=False)
+        [line] = faebot.conversations["777"]["conversation"]
+        assert '[Berry reacted ✨ to "the longest riddle' in line
+        assert line.endswith('…"]')
+
+    def test_a_removal_is_shown_too(self, faebot):
+        faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
+        faebot.get_user = Mock(return_value=None)
+        with patch.object(
+            type(faebot),
+            "cached_messages",
+            new_callable=lambda: property(lambda self: []),
+        ):
+            faebot._log_reaction(self._reaction_payload(), removed=True)
+        [line] = faebot.conversations["777"]["conversation"]
+        assert "[someone removed their ✨]" in line
+
+    def test_reactions_in_unknown_channels_are_ignored(self, faebot):
+        faebot.conversations = {}
+        faebot._log_reaction(self._reaction_payload(), removed=False)
+        assert faebot.conversations == {}

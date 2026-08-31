@@ -204,6 +204,58 @@ class Faebot(discord.Client):
 
         return content
 
+    def _describe_attachments(self, attachments) -> str:
+        """Bracketed attachment senses for the live history — the same words
+        the offline transducer uses, so both of faebot's bodies feel the sense
+        the same way. Live messages always postdate the sense, so two states:
+        described in the author's own words, or the hole labeled (never an
+        image silently treated as no-image). Non-media files stay filenames —
+        alt text isn't expected of a .py file."""
+        described = []
+        for attachment in attachments:
+            name = attachment.filename
+            content_type = attachment.content_type or ""
+            if attachment.description:
+                described.append(f'{name} — "{attachment.description}"')
+            elif content_type.startswith("image/"):
+                described.append(f"{name} — an image, no description offered")
+            elif content_type.startswith("video/"):
+                described.append(f"{name} — a video, no description offered")
+            else:
+                described.append(name)
+        return f"[attachment: {', '.join(described)}]" if described else ""
+
+    def _with_attachments(self, content: str, message) -> str:
+        """Compose a message's text with its attachment senses, in order."""
+        note = self._describe_attachments(getattr(message, "attachments", []) or [])
+        if not note:
+            return content
+        return f"{content} {note}".strip()
+
+    def _log_reaction(self, payload, removed: bool) -> None:
+        """The who-reacts sense on the speaking surface: reactions enter the
+        live history as labeled bracket lines. Adds AND removals — an honest
+        stream shows the taking-back too. The reactor comes from the payload
+        or the user cache, never the network; a miss stays "someone"."""
+        conversation_id = str(payload.channel_id)
+        if conversation_id not in self.conversations:
+            return
+        reactor = getattr(payload, "member", None) or self.get_user(payload.user_id)
+        who = reactor.display_name if reactor else "someone"
+        emoji = str(payload.emoji)
+        target = discord.utils.get(self.cached_messages, id=payload.message_id)
+        place = ""
+        if target and target.content:
+            text = self._resolve_discord_formatting(target.content, target)
+            stub = f"{text[:40]}…" if len(text) > 40 else text
+            place = f' from "{stub}"' if removed else f' to "{stub}"'
+        verb = "removed their" if removed else "reacted"
+        current_time = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversations[conversation_id]["conversation"].append(
+            f"[{current_time}] [{who} {verb} {emoji}{place}]"
+        )
+        self._trim_conversation_history(conversation_id)
+
     def _is_proxy_message(self, message) -> bool:
         """Detect webhook-proxied messages (PluralKit, Tupperbox, etc.)."""
         return message.webhook_id is not None and message.author.bot
@@ -234,7 +286,12 @@ class Faebot(discord.Client):
         conv = self.conversations[conversation_id]["conversation"]
         proxy_author = proxy_msg.author.display_name
         proxy_time = proxy_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-        proxy_content = self._resolve_discord_formatting(proxy_msg.content, proxy_msg)
+        # The proxy repost carries the original's attachments — keep the
+        # attachment senses through the swap, or an image would blink out of
+        # faebot's history the moment PluralKit reposts it.
+        proxy_content = self._with_attachments(
+            self._resolve_discord_formatting(proxy_msg.content, proxy_msg), proxy_msg
+        )
         proxy_entry = f"[{proxy_time}] {proxy_author}: {proxy_content}"
 
         # Search from the end since the original was the most recently appended entry
@@ -319,11 +376,13 @@ class Faebot(discord.Client):
             "reaction_add",
             reactor=payload.member or self.get_user(payload.user_id),
         )
+        self._log_reaction(payload, removed=False)
 
     async def on_raw_reaction_remove(self, payload):
         capture.record_reaction(
             payload, "reaction_remove", reactor=self.get_user(payload.user_id)
         )
+        self._log_reaction(payload, removed=True)
 
     async def on_typing(self, channel, user, when):
         capture.record_typing(channel, user, when)
@@ -414,8 +473,9 @@ class Faebot(discord.Client):
             proxy_name = message.author.display_name
             self.conversations[conversation_id]["conversants"][proxy_name] = proxy_name
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            resolved_content = self._resolve_discord_formatting(
-                message.content, message
+            # Proxied reposts carry the original's attachments — same senses.
+            resolved_content = self._with_attachments(
+                self._resolve_discord_formatting(message.content, message), message
             )
             self.conversations[conversation_id]["conversation"].append(
                 f"[{current_time}] {proxy_name}: {resolved_content}"
@@ -497,7 +557,12 @@ class Faebot(discord.Client):
             ):
                 ref_msg = message.reference.resolved
                 ref_time = ref_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                ref_content = self._resolve_discord_formatting(ref_msg.content, ref_msg)
+                # A quote is a fresh perception: the resolved message comes
+                # back from Discord with today's fields, so even an image from
+                # before the alt-text sense re-arrives described.
+                ref_content = self._with_attachments(
+                    self._resolve_discord_formatting(ref_msg.content, ref_msg), ref_msg
+                )
                 ref_entry = f"[{ref_time}] {ref_msg.author.display_name}: {ref_content}"
 
                 # Only add if not already in conversation
@@ -508,8 +573,8 @@ class Faebot(discord.Client):
 
             # Log the current message with timestamp, resolving Discord formatting
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            resolved_content = self._resolve_discord_formatting(
-                message.content, message
+            resolved_content = self._with_attachments(
+                self._resolve_discord_formatting(message.content, message), message
             )
             if hasattr(message, "reference") and message.reference:
                 self.conversations[conversation_id]["conversation"].append(
