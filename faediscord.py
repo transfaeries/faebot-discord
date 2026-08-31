@@ -204,33 +204,96 @@ class Faebot(discord.Client):
 
         return content
 
-    def _describe_attachments(self, attachments) -> str:
+    def _describe_attachments(self, attachments) -> list[str]:
         """Bracketed attachment senses for the live history — the same words
         the offline transducer uses, so both of faebot's bodies feel the sense
         the same way. Live messages always postdate the sense, so two states:
         described in the author's own words, or the hole labeled (never an
         image silently treated as no-image). Non-media files stay filenames —
-        alt text isn't expected of a .py file."""
+        alt text isn't expected of a .py file. A voice message renders as its
+        own bracket — someone chose their voice, and faebot knows it without
+        pretending to have heard a word. A spoiler carries the author's own
+        curtain as words ("marked a spoiler") — faebot has no click, so the
+        curtain must arrive labeled or not at all."""
         described = []
+        voice_parts = []
         for attachment in attachments:
+            if getattr(attachment, "duration", None):
+                voice_parts.append(
+                    f"[voice message, {round(attachment.duration)} seconds]"
+                )
+                continue
             name = attachment.filename
             content_type = attachment.content_type or ""
             if attachment.description:
-                described.append(f'{name} — "{attachment.description}"')
+                part = f'{name} — "{attachment.description}"'
             elif content_type.startswith("image/"):
-                described.append(f"{name} — an image, no description offered")
+                part = f"{name} — an image, no description offered"
             elif content_type.startswith("video/"):
-                described.append(f"{name} — a video, no description offered")
+                part = f"{name} — a video, no description offered"
             else:
-                described.append(name)
-        return f"[attachment: {', '.join(described)}]" if described else ""
+                part = name
+            if attachment.is_spoiler():
+                part += " — marked a spoiler"
+            described.append(part)
+        parts = []
+        if described:
+            parts.append(f"[attachment: {', '.join(described)}]")
+        parts.extend(voice_parts)
+        return parts
 
-    def _with_attachments(self, content: str, message) -> str:
-        """Compose a message's text with its attachment senses, in order."""
-        note = self._describe_attachments(getattr(message, "attachments", []) or [])
-        if not note:
-            return content
-        return f"{content} {note}".strip()
+    def _describe_embeds(self, embeds) -> list[str]:
+        """Link previews and other embeds, at the nameplate tier: title and
+        description as Discord's own preview offers them — the door's label,
+        never the room behind it (no page fetches, ever). Takes discord.py
+        Embed objects or raw gateway dicts (the edit path hands us dicts)."""
+
+        def field(embed, key):
+            return (
+                embed.get(key) if isinstance(embed, dict) else getattr(embed, key, None)
+            )
+
+        parts = []
+        for embed in embeds:
+            title = field(embed, "title")
+            description = field(embed, "description")
+            if title and description:
+                parts.append(f'[embed: {title} — "{description}"]')
+            elif title:
+                parts.append(f"[embed: {title}]")
+            elif description:
+                parts.append(f'[embed: "{description}"]')
+        return parts
+
+    def _log_embed_arrival(self, payload) -> None:
+        """Link previews mostly arrive by a MESSAGE_UPDATE moments after the
+        message posts — without this, the speaking body would never see most
+        nameplates. Fires only when the cache proves the embeds are new
+        (the cached message had none); an uncached miss stays a miss."""
+        conversation_id = str(payload.channel_id)
+        if conversation_id not in self.conversations:
+            return
+        cached = getattr(payload, "cached_message", None)
+        if cached is None or cached.embeds:
+            return
+        parts = self._describe_embeds((payload.data or {}).get("embeds") or [])
+        if not parts:
+            return
+        current_time = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversations[conversation_id]["conversation"].append(
+            f"[{current_time}] {' '.join(parts)}"
+        )
+        self._trim_conversation_history(conversation_id)
+
+    def _with_senses(self, content: str, message) -> str:
+        """Compose a message's text with its senses, in order: attachments
+        (described or labeled), voice messages, then embed nameplates."""
+        parts = [content] if content else []
+        parts.extend(
+            self._describe_attachments(getattr(message, "attachments", []) or [])
+        )
+        parts.extend(self._describe_embeds(getattr(message, "embeds", []) or []))
+        return " ".join(parts).strip()
 
     def _log_reaction(self, payload, removed: bool) -> None:
         """The who-reacts sense on the speaking surface: reactions enter the
@@ -289,7 +352,7 @@ class Faebot(discord.Client):
         # The proxy repost carries the original's attachments — keep the
         # attachment senses through the swap, or an image would blink out of
         # faebot's history the moment PluralKit reposts it.
-        proxy_content = self._with_attachments(
+        proxy_content = self._with_senses(
             self._resolve_discord_formatting(proxy_msg.content, proxy_msg), proxy_msg
         )
         proxy_entry = f"[{proxy_time}] {proxy_author}: {proxy_content}"
@@ -364,6 +427,7 @@ class Faebot(discord.Client):
 
     async def on_raw_message_edit(self, payload):
         capture.record_message_edit(payload)
+        self._log_embed_arrival(payload)
 
     async def on_raw_message_delete(self, payload):
         capture.record_message_delete(payload)
@@ -474,7 +538,7 @@ class Faebot(discord.Client):
             self.conversations[conversation_id]["conversants"][proxy_name] = proxy_name
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
             # Proxied reposts carry the original's attachments — same senses.
-            resolved_content = self._with_attachments(
+            resolved_content = self._with_senses(
                 self._resolve_discord_formatting(message.content, message), message
             )
             self.conversations[conversation_id]["conversation"].append(
@@ -560,7 +624,7 @@ class Faebot(discord.Client):
                 # A quote is a fresh perception: the resolved message comes
                 # back from Discord with today's fields, so even an image from
                 # before the alt-text sense re-arrives described.
-                ref_content = self._with_attachments(
+                ref_content = self._with_senses(
                     self._resolve_discord_formatting(ref_msg.content, ref_msg), ref_msg
                 )
                 ref_entry = f"[{ref_time}] {ref_msg.author.display_name}: {ref_content}"
@@ -573,7 +637,7 @@ class Faebot(discord.Client):
 
             # Log the current message with timestamp, resolving Discord formatting
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            resolved_content = self._with_attachments(
+            resolved_content = self._with_senses(
                 self._resolve_discord_formatting(message.content, message), message
             )
             if hasattr(message, "reference") and message.reference:
