@@ -312,10 +312,18 @@ class Faebot(discord.Client):
         capture.record_message_delete(payload)
 
     async def on_raw_reaction_add(self, payload):
-        capture.record_reaction(payload, "reaction_add")
+        # payload.member rides free on guild adds (nick included); the user
+        # cache covers the rest. Never a network call — a miss stays a miss.
+        capture.record_reaction(
+            payload,
+            "reaction_add",
+            reactor=payload.member or self.get_user(payload.user_id),
+        )
 
     async def on_raw_reaction_remove(self, payload):
-        capture.record_reaction(payload, "reaction_remove")
+        capture.record_reaction(
+            payload, "reaction_remove", reactor=self.get_user(payload.user_id)
+        )
 
     async def on_typing(self, channel, user, when):
         capture.record_typing(channel, user, when)

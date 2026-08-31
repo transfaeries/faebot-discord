@@ -162,10 +162,36 @@ def serialize_message(message: Any) -> Dict[str, Any]:
                 "filename": attachment.filename,
                 "content_type": attachment.content_type,
                 "size": attachment.size,
+                # The alt text — the author's own words for what an image
+                # shows. None = the field was live but nothing was offered;
+                # rows captured before it existed lack the key entirely
+                # (downstream renders the three states differently).
+                "description": attachment.description,
+                "title": attachment.title,
+                "width": attachment.width,
+                "height": attachment.height,
+                # Voice messages carry a length in seconds; None otherwise.
+                "duration_secs": attachment.duration,
+                "spoiler": attachment.is_spoiler(),
+                # The CDN link is signed and short-lived (~24h), so it only
+                # serves a prompt reader — but not capturing it is the one
+                # irreversible mistake.
+                "url": attachment.url,
             }
             for attachment in message.attachments
         ],
-        "embeds": len(message.embeds),
+        # A list of shapes since 2026-08-31 (link previews are embeds — their
+        # titles carry real content); older rows hold a bare count.
+        "embeds": [
+            {
+                "type": embed.type,
+                "title": embed.title,
+                "description": embed.description,
+                "url": embed.url,
+                "provider": getattr(embed.provider, "name", None),
+            }
+            for embed in message.embeds
+        ],
         "stickers": [sticker.name for sticker in message.stickers],
         "reactions": [
             {"emoji": str(reaction.emoji), "count": reaction.count}
@@ -230,8 +256,12 @@ def record_message_delete(payload: Any) -> None:
         logging.debug("capture delete failed: %s: %s", type(error).__name__, error)
 
 
-def record_reaction(payload: Any, action: str) -> None:
-    """Raw reaction add/remove. `action` is "reaction_add" or "reaction_remove"."""
+def record_reaction(payload: Any, action: str, reactor: Any = None) -> None:
+    """Raw reaction add/remove. `action` is "reaction_add" or "reaction_remove".
+    `reactor` is the best user object the caller resolved without the network
+    (payload.member on guild adds, the client's user cache otherwise); None when
+    nobody in the cache knows the id — downstream falls back to names the
+    corpus already holds, then to "someone"."""
     if not is_enabled():
         return
     try:
@@ -239,6 +269,7 @@ def record_reaction(payload: Any, action: str) -> None:
             action,
             {
                 "user_id": payload.user_id,
+                "user": serialize_user(reactor),
                 "message_id": payload.message_id,
                 "channel_id": payload.channel_id,
                 "guild_id": payload.guild_id,
