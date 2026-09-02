@@ -135,3 +135,38 @@ class TestWhoReacts:
         payload = self._recorded(monkeypatch, None)
         assert payload["user"] is None
         assert payload["user_id"] == 42
+
+
+class TestQuotedAttachments:
+    def _attachment(self, **overrides):
+        attachment = SimpleNamespace(
+            filename="photo.png",
+            content_type="image/png",
+            description="a lake at dusk",
+            duration=None,
+            is_spoiler=lambda: False,
+        )
+        for key, value in overrides.items():
+            setattr(attachment, key, value)
+        return attachment
+
+    def test_an_unresolved_reference_is_none_not_an_empty_list(self):
+        message = make_message(reference=SimpleNamespace(message_id=9, resolved=None))
+        assert capture.serialize_message(message)["reply_to_attachments"] is None
+
+    def test_a_resolved_quote_carries_what_both_renderers_read(self):
+        quoted = SimpleNamespace(
+            attachments=[
+                self._attachment(is_spoiler=lambda: True),
+                self._attachment(
+                    filename="voice-message.ogg",
+                    content_type="audio/ogg",
+                    description=None,
+                    duration=12.2,
+                ),
+            ]
+        )
+        message = make_message(reference=SimpleNamespace(message_id=9, resolved=quoted))
+        [image, voice] = capture.serialize_message(message)["reply_to_attachments"]
+        assert image["spoiler"] is True and image["description"] == "a lake at dusk"
+        assert voice["duration_secs"] == 12.2 and voice["spoiler"] is False

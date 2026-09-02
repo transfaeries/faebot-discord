@@ -977,22 +977,30 @@ class TestLiveSenses:
         )
         assert note == ["[attachment: script.py]"]
 
-    def test_with_senses_composes_and_strips(self, faebot):
+    def _message(self, content="", attachments=(), embeds=()):
         message = Mock()
-        message.attachments = [self._attachment()]
-        message.embeds = []
-        assert faebot._with_senses("", message).startswith("[attachment:")
-        message.attachments = []
-        message.embeds = []
-        assert faebot._with_senses("just words", message) == "just words"
+        message.content = content
+        message.attachments = list(attachments)
+        message.embeds = list(embeds)
+        message.mentions = []
+        message.role_mentions = []
+        message.channel_mentions = []
+        return message
 
-    def _reaction_payload(self, member=None):
+    def test_render_message_composes_text_and_senses(self, faebot):
+        rendered = faebot._render_message(
+            self._message(attachments=[self._attachment()])
+        )
+        assert rendered.startswith("[attachment:")
+        assert faebot._render_message(self._message("just words")) == "just words"
+
+    def _reaction_payload(self, emoji="✨"):
         payload = Mock()
         payload.channel_id = 777
         payload.message_id = 555
         payload.user_id = 42
-        payload.emoji = "✨"
-        payload.member = member
+        payload.emoji = Mock()
+        payload.emoji.name = emoji
         return payload
 
     def test_a_reaction_enters_history_with_name_and_stub(self, faebot):
@@ -1012,26 +1020,36 @@ class TestLiveSenses:
             "cached_messages",
             new_callable=lambda: property(lambda self: [target]),
         ):
-            faebot._log_reaction(self._reaction_payload(member=member), removed=False)
+            faebot._log_reaction(self._reaction_payload(), member, removed=False)
         [line] = faebot.conversations["777"]["conversation"]
         assert '[Berry reacted ✨ to "the longest riddle' in line
         assert line.endswith('…"]')
 
     def test_a_removal_is_shown_too(self, faebot):
         faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
-        faebot.get_user = Mock(return_value=None)
         with patch.object(
             type(faebot),
             "cached_messages",
             new_callable=lambda: property(lambda self: []),
         ):
-            faebot._log_reaction(self._reaction_payload(), removed=True)
+            faebot._log_reaction(self._reaction_payload(), None, removed=True)
         [line] = faebot.conversations["777"]["conversation"]
         assert "[someone removed their ✨]" in line
 
+    def test_a_custom_emoji_renders_by_name_like_the_transducer(self, faebot):
+        faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
+        with patch.object(
+            type(faebot),
+            "cached_messages",
+            new_callable=lambda: property(lambda self: []),
+        ):
+            faebot._log_reaction(self._reaction_payload("sparkle"), None, removed=False)
+        [line] = faebot.conversations["777"]["conversation"]
+        assert "[someone reacted sparkle]" in line
+
     def test_reactions_in_unknown_channels_are_ignored(self, faebot):
         faebot.conversations = {}
-        faebot._log_reaction(self._reaction_payload(), removed=False)
+        faebot._log_reaction(self._reaction_payload(), None, removed=False)
         assert faebot.conversations == {}
 
 
@@ -1081,16 +1099,25 @@ class TestBlessedSenses:
             '[embed: An article — "Its preview text"]'
         ]
 
+    def test_a_bare_embed_stays_countable_like_the_transducer(self, faebot):
+        bare = Mock()
+        bare.title = None
+        bare.description = None
+        assert faebot._describe_embeds([bare]) == ["[1 embed(s)]"]
+
     def test_an_embed_arrival_by_edit_enters_history(self, faebot):
         faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
         payload = Mock()
         payload.channel_id = 777
         payload.cached_message = Mock()
         payload.cached_message.embeds = []
-        payload.data = {"embeds": [{"title": "An article", "description": "Preview"}]}
+        payload.data = {
+            "embeds": [{"title": "An article", "description": "Preview"}],
+            "edited_timestamp": "2026-09-01T12:34:56.000000+00:00",
+        }
         faebot._log_embed_arrival(payload)
         [line] = faebot.conversations["777"]["conversation"]
-        assert '[embed: An article — "Preview"]' in line
+        assert line == '[2026-09-01 12:34:56] [embed: An article — "Preview"]'
 
     def test_an_uncached_edit_stays_an_honest_miss(self, faebot):
         faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
