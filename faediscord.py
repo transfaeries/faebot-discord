@@ -204,6 +204,119 @@ class Faebot(discord.Client):
 
         return content
 
+    def _describe_attachments(self, attachments) -> list[str]:
+        """Bracketed attachment senses for the live history, in the same words
+        the offline transducer uses. An image or video is described in the
+        author's own words or gets its hole labeled; other files stay
+        filenames; a voice message is its own bracket; a spoiler is labeled."""
+        described = []
+        voice_parts = []
+        for attachment in attachments:
+            if getattr(attachment, "duration", None):
+                voice_parts.append(
+                    f"[voice message, {round(attachment.duration)} seconds]"
+                )
+                continue
+            name = attachment.filename
+            content_type = attachment.content_type or ""
+            if attachment.description:
+                part = f'{name} — "{attachment.description}"'
+            elif content_type.startswith("image/"):
+                part = f"{name} — an image, no description offered"
+            elif content_type.startswith("video/"):
+                part = f"{name} — a video, no description offered"
+            else:
+                part = name
+            if attachment.is_spoiler():
+                part += " — marked a spoiler"
+            described.append(part)
+        parts = []
+        if described:
+            parts.append(f"[attachment: {', '.join(described)}]")
+        parts.extend(voice_parts)
+        return parts
+
+    def _describe_embeds(self, embeds) -> list[str]:
+        """Embeds at the nameplate tier: title and description as Discord's
+        own preview offers them, never a page fetch. Takes discord.py Embed
+        objects. An embed with neither (a bare image or gif preview) stays
+        countable rather than invisible — the same words as the transducer."""
+        parts = []
+        for embed in embeds:
+            if embed.title and embed.description:
+                parts.append(f'[embed: {embed.title} — "{embed.description}"]')
+            elif embed.title:
+                parts.append(f"[embed: {embed.title}]")
+            elif embed.description:
+                parts.append(f'[embed: "{embed.description}"]')
+        if not parts and embeds:
+            parts.append(f"[{len(embeds)} embed(s)]")
+        return parts
+
+    def _log_embed_arrival(self, payload) -> None:
+        """Link previews mostly arrive by a MESSAGE_UPDATE moments after the
+        message posts — without this, the speaking body would never see most
+        nameplates. Fires only when the cache proves the embeds are new (the
+        cached message had none). Honest misses: an uncached message, and a
+        message that already had one embed and gains another — "had embeds"
+        stands in for "these embeds were seen". Stamped with the edit's own
+        time when Discord sends one."""
+        conversation_id = str(payload.channel_id)
+        if conversation_id not in self.conversations:
+            return
+        cached = payload.cached_message
+        if cached is None or cached.embeds:
+            return
+        embeds = [
+            discord.Embed.from_dict(raw) for raw in payload.data.get("embeds") or []
+        ]
+        parts = self._describe_embeds(embeds)
+        if not parts:
+            return
+        edited_at = discord.utils.parse_time(payload.data.get("edited_timestamp"))
+        current_time = (edited_at or discord.utils.utcnow()).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        self.conversations[conversation_id]["conversation"].append(
+            f"[{current_time}] {' '.join(parts)}"
+        )
+        self._trim_conversation_history(conversation_id)
+
+    def _render_message(self, message) -> str:
+        """A message as it enters the live history: its text with Discord
+        formatting resolved, then its senses in order — attachments (described
+        or labeled), voice messages, embed nameplates."""
+        content = self._resolve_discord_formatting(message.content, message)
+        parts = [content] if content else []
+        parts.extend(self._describe_attachments(message.attachments))
+        parts.extend(self._describe_embeds(message.embeds))
+        return " ".join(parts).strip()
+
+    def _log_reaction(self, payload, reactor, removed: bool) -> None:
+        """The who-reacts sense on the speaking surface: reactions enter the
+        live history as labeled bracket lines, adds and removals both. The
+        caller resolved `reactor` without the network; None renders as
+        "someone". Discord sends the guild member on adds but not on removals,
+        so the same person may show a server nick reacting and a global name
+        un-reacting — accepted, rather than fetch."""
+        conversation_id = str(payload.channel_id)
+        if conversation_id not in self.conversations:
+            return
+        who = reactor.display_name if reactor else "someone"
+        emoji = payload.emoji.name
+        target = discord.utils.get(self.cached_messages, id=payload.message_id)
+        place = ""
+        if target and target.content:
+            text = self._resolve_discord_formatting(target.content, target)
+            stub = f"{text[:40]}…" if len(text) > 40 else text
+            place = f' from "{stub}"' if removed else f' to "{stub}"'
+        verb = "removed their" if removed else "reacted"
+        current_time = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        self.conversations[conversation_id]["conversation"].append(
+            f"[{current_time}] [{who} {verb} {emoji}{place}]"
+        )
+        self._trim_conversation_history(conversation_id)
+
     def _is_proxy_message(self, message) -> bool:
         """Detect webhook-proxied messages (PluralKit, Tupperbox, etc.)."""
         return message.webhook_id is not None and message.author.bot
@@ -234,7 +347,10 @@ class Faebot(discord.Client):
         conv = self.conversations[conversation_id]["conversation"]
         proxy_author = proxy_msg.author.display_name
         proxy_time = proxy_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-        proxy_content = self._resolve_discord_formatting(proxy_msg.content, proxy_msg)
+        # The proxy repost carries the original's attachments — keep the
+        # senses through the swap, or an image would blink out of faebot's
+        # history the moment PluralKit reposts it.
+        proxy_content = self._render_message(proxy_msg)
         proxy_entry = f"[{proxy_time}] {proxy_author}: {proxy_content}"
 
         # Search from the end since the original was the most recently appended entry
@@ -302,20 +418,28 @@ class Faebot(discord.Client):
         logging.info("------")
 
     # --- spike-01 capture delegates -------------------------------------------
-    # Thin pass-throughs to capture.py: record raw surface events for offline
-    # transduction. Capture-only — none of this feeds the live bot's prompt.
+    # Raw surface events: every one is recorded by capture.py for offline
+    # transduction, and the ones that are senses (embed arrivals, reactions)
+    # also enter the live history.
 
     async def on_raw_message_edit(self, payload):
         capture.record_message_edit(payload)
+        self._log_embed_arrival(payload)
 
     async def on_raw_message_delete(self, payload):
         capture.record_message_delete(payload)
 
     async def on_raw_reaction_add(self, payload):
-        capture.record_reaction(payload, "reaction_add")
+        # payload.member rides free on guild adds (nick included); the user
+        # cache covers the rest. Never a network call — a miss stays a miss.
+        reactor = payload.member or self.get_user(payload.user_id)
+        capture.record_reaction(payload, "reaction_add", reactor)
+        self._log_reaction(payload, reactor, removed=False)
 
     async def on_raw_reaction_remove(self, payload):
-        capture.record_reaction(payload, "reaction_remove")
+        reactor = self.get_user(payload.user_id)
+        capture.record_reaction(payload, "reaction_remove", reactor)
+        self._log_reaction(payload, reactor, removed=True)
 
     async def on_typing(self, channel, user, when):
         capture.record_typing(channel, user, when)
@@ -406,9 +530,7 @@ class Faebot(discord.Client):
             proxy_name = message.author.display_name
             self.conversations[conversation_id]["conversants"][proxy_name] = proxy_name
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            resolved_content = self._resolve_discord_formatting(
-                message.content, message
-            )
+            resolved_content = self._render_message(message)
             self.conversations[conversation_id]["conversation"].append(
                 f"[{current_time}] {proxy_name}: {resolved_content}"
             )
@@ -489,7 +611,10 @@ class Faebot(discord.Client):
             ):
                 ref_msg = message.reference.resolved
                 ref_time = ref_msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                ref_content = self._resolve_discord_formatting(ref_msg.content, ref_msg)
+                # A quote is a fresh perception: the resolved message comes
+                # back from Discord with today's fields, so even an image from
+                # before the alt-text sense re-arrives described.
+                ref_content = self._render_message(ref_msg)
                 ref_entry = f"[{ref_time}] {ref_msg.author.display_name}: {ref_content}"
 
                 # Only add if not already in conversation
@@ -500,9 +625,7 @@ class Faebot(discord.Client):
 
             # Log the current message with timestamp, resolving Discord formatting
             current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            resolved_content = self._resolve_discord_formatting(
-                message.content, message
-            )
+            resolved_content = self._render_message(message)
             if hasattr(message, "reference") and message.reference:
                 self.conversations[conversation_id]["conversation"].append(
                     f"[{current_time}] {author} replied: {resolved_content}"

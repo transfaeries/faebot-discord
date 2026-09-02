@@ -78,6 +78,8 @@ class TestFaebot:
         message.reference = None
         message.mentions = []
         message.role_mentions = []
+        message.attachments = []
+        message.embeds = []
         message.channel_mentions = []
         message.webhook_id = None
         message.id = 111111111111111111
@@ -362,6 +364,8 @@ class TestFaebot:
         ref_msg.created_at.strftime.return_value = "2024-01-01 11:59:00"
         ref_msg.mentions = []
         ref_msg.role_mentions = []
+        ref_msg.attachments = []
+        ref_msg.embeds = []
         ref_msg.channel_mentions = []
 
         mock_message.reference = Mock()
@@ -532,6 +536,8 @@ class TestFaebot:
         user2.display_name = "Aisling"
         message.mentions = [user1, user2]
         message.role_mentions = []
+        message.attachments = []
+        message.embeds = []
         message.channel_mentions = []
 
         content = "hey <@882358999830364212> and <@!123456789012345678> what's up"
@@ -544,6 +550,8 @@ class TestFaebot:
         message = Mock()
         message.mentions = []
         message.role_mentions = []
+        message.attachments = []
+        message.embeds = []
         message.channel_mentions = []
 
         content = "love this <:faebotyay:1465010932068519999> so much <a:danceparty:9876543210>"
@@ -577,6 +585,8 @@ class TestFaebot:
         user.display_name = "Ember"
         message.mentions = [user]
         message.role_mentions = []
+        message.attachments = []
+        message.embeds = []
         message.channel_mentions = []
 
         content = "<@882358999830364212> look at this <:sparkle:123456> in the chat"
@@ -694,6 +704,8 @@ class TestFaebot:
         proxy_msg.content = "hello brownie-dev!"
         proxy_msg.mentions = []
         proxy_msg.role_mentions = []
+        proxy_msg.attachments = []
+        proxy_msg.embeds = []
         proxy_msg.channel_mentions = []
 
         faebot._swap_history_for_proxy(
@@ -819,6 +831,8 @@ class TestFaebot:
         mention_user.display_name = "brownie-dev"
         mock_message.mentions = [mention_user]
         mock_message.role_mentions = []
+        mock_message.attachments = []
+        mock_message.embeds = []
         mock_message.channel_mentions = []
 
         with patch.object(
@@ -895,6 +909,8 @@ class TestFaebot:
         proxy_msg.created_at.strftime.return_value = "2024-01-01 12:00:01"
         proxy_msg.mentions = []
         proxy_msg.role_mentions = []
+        proxy_msg.attachments = []
+        proxy_msg.embeds = []
         proxy_msg.channel_mentions = []
         proxy_msg.reference = None
         proxy_msg.guild = mock_message.guild
@@ -918,3 +934,196 @@ class TestFaebot:
                         await faebot._handle_conversation(mock_message, conversation_id)
 
         mock_message.channel.send.assert_called_once_with("hi ember!")
+
+
+class TestLiveSenses:
+    """The small senses on the speaking surface — attachments described (or
+    their holes labeled) and reactions entering history as labeled lines."""
+
+    @pytest.fixture
+    def faebot(self, request):
+        intents = Mock()
+        intents.message_content = True
+        with patch("discord.Client.__init__", return_value=None):
+            bot = Faebot(intents)
+            bot._connection = Mock()
+            bot.fdb = Mock()
+            return bot
+
+    def _attachment(self, **overrides):
+        attachment = Mock()
+        attachment.filename = "photo.png"
+        attachment.content_type = "image/png"
+        attachment.description = None
+        attachment.duration = None
+        attachment.is_spoiler = Mock(return_value=False)
+        for key, value in overrides.items():
+            setattr(attachment, key, value)
+        return attachment
+
+    def test_described_image_renders_the_authors_words(self, faebot):
+        note = faebot._describe_attachments(
+            [self._attachment(description="a cat on a windowsill")]
+        )
+        assert note == ['[attachment: photo.png — "a cat on a windowsill"]']
+
+    def test_undescribed_image_gets_the_labeled_hole(self, faebot):
+        note = faebot._describe_attachments([self._attachment()])
+        assert note == ["[attachment: photo.png — an image, no description offered]"]
+
+    def test_non_media_files_stay_filenames(self, faebot):
+        note = faebot._describe_attachments(
+            [self._attachment(filename="script.py", content_type="text/x-python")]
+        )
+        assert note == ["[attachment: script.py]"]
+
+    def _message(self, content="", attachments=(), embeds=()):
+        message = Mock()
+        message.content = content
+        message.attachments = list(attachments)
+        message.embeds = list(embeds)
+        message.mentions = []
+        message.role_mentions = []
+        message.channel_mentions = []
+        return message
+
+    def test_render_message_composes_text_and_senses(self, faebot):
+        rendered = faebot._render_message(
+            self._message(attachments=[self._attachment()])
+        )
+        assert rendered.startswith("[attachment:")
+        assert faebot._render_message(self._message("just words")) == "just words"
+
+    def _reaction_payload(self, emoji="✨"):
+        payload = Mock()
+        payload.channel_id = 777
+        payload.message_id = 555
+        payload.user_id = 42
+        payload.emoji = Mock()
+        payload.emoji.name = emoji
+        return payload
+
+    def test_a_reaction_enters_history_with_name_and_stub(self, faebot):
+        faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
+        member = Mock()
+        member.display_name = "Berry"
+        target = Mock()
+        target.id = 555
+        target.content = "the longest riddle anyone has ever posed in this channel"
+        target.mentions = []
+        target.role_mentions = []
+        target.attachments = []
+        target.embeds = []
+        target.channel_mentions = []
+        with patch.object(
+            type(faebot),
+            "cached_messages",
+            new_callable=lambda: property(lambda self: [target]),
+        ):
+            faebot._log_reaction(self._reaction_payload(), member, removed=False)
+        [line] = faebot.conversations["777"]["conversation"]
+        assert '[Berry reacted ✨ to "the longest riddle' in line
+        assert line.endswith('…"]')
+
+    def test_a_removal_is_shown_too(self, faebot):
+        faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
+        with patch.object(
+            type(faebot),
+            "cached_messages",
+            new_callable=lambda: property(lambda self: []),
+        ):
+            faebot._log_reaction(self._reaction_payload(), None, removed=True)
+        [line] = faebot.conversations["777"]["conversation"]
+        assert "[someone removed their ✨]" in line
+
+    def test_a_custom_emoji_renders_by_name_like_the_transducer(self, faebot):
+        faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
+        with patch.object(
+            type(faebot),
+            "cached_messages",
+            new_callable=lambda: property(lambda self: []),
+        ):
+            faebot._log_reaction(self._reaction_payload("sparkle"), None, removed=False)
+        [line] = faebot.conversations["777"]["conversation"]
+        assert "[someone reacted sparkle]" in line
+
+    def test_reactions_in_unknown_channels_are_ignored(self, faebot):
+        faebot.conversations = {}
+        faebot._log_reaction(self._reaction_payload(), None, removed=False)
+        assert faebot.conversations == {}
+
+
+class TestBlessedSenses:
+    """The three senses blessed at the 08-31 sitting: embeds at the nameplate
+    tier, voice messages as their own bracket, spoilers labeled."""
+
+    @pytest.fixture
+    def faebot(self):
+        intents = Mock()
+        intents.message_content = True
+        with patch("discord.Client.__init__", return_value=None):
+            bot = Faebot(intents)
+            bot._connection = Mock()
+            bot.fdb = Mock()
+            return bot
+
+    def _attachment(self, **overrides):
+        attachment = Mock()
+        attachment.filename = "photo.png"
+        attachment.content_type = "image/png"
+        attachment.description = None
+        attachment.duration = None
+        attachment.is_spoiler = Mock(return_value=False)
+        for key, value in overrides.items():
+            setattr(attachment, key, value)
+        return attachment
+
+    def test_a_voice_message_is_its_own_bracket(self, faebot):
+        voice = self._attachment(
+            filename="voice-message.ogg", content_type="audio/ogg", duration=46.6
+        )
+        parts = faebot._describe_attachments([voice])
+        assert parts == ["[voice message, 47 seconds]"]
+
+    def test_a_spoiler_carries_the_authors_curtain(self, faebot):
+        curtained = self._attachment()
+        curtained.is_spoiler = Mock(return_value=True)
+        [part] = faebot._describe_attachments([curtained])
+        assert part.endswith("an image, no description offered — marked a spoiler]")
+
+    def test_embeds_render_at_the_nameplate_tier(self, faebot):
+        embed = Mock()
+        embed.title = "An article"
+        embed.description = "Its preview text"
+        assert faebot._describe_embeds([embed]) == [
+            '[embed: An article — "Its preview text"]'
+        ]
+
+    def test_a_bare_embed_stays_countable_like_the_transducer(self, faebot):
+        bare = Mock()
+        bare.title = None
+        bare.description = None
+        assert faebot._describe_embeds([bare]) == ["[1 embed(s)]"]
+
+    def test_an_embed_arrival_by_edit_enters_history(self, faebot):
+        faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
+        payload = Mock()
+        payload.channel_id = 777
+        payload.cached_message = Mock()
+        payload.cached_message.embeds = []
+        payload.data = {
+            "embeds": [{"title": "An article", "description": "Preview"}],
+            "edited_timestamp": "2026-09-01T12:34:56.000000+00:00",
+        }
+        faebot._log_embed_arrival(payload)
+        [line] = faebot.conversations["777"]["conversation"]
+        assert line == '[2026-09-01 12:34:56] [embed: An article — "Preview"]'
+
+    def test_an_uncached_edit_stays_an_honest_miss(self, faebot):
+        faebot.conversations = {"777": {"conversation": [], "history_length": 69}}
+        payload = Mock()
+        payload.channel_id = 777
+        payload.cached_message = None
+        payload.data = {"embeds": [{"title": "An article"}]}
+        faebot._log_embed_arrival(payload)
+        assert faebot.conversations["777"]["conversation"] == []
