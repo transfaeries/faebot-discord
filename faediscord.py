@@ -47,11 +47,13 @@ logging.basicConfig(
 # summoned her shows its whole history (the history_length dial).
 EARSHOT_ROOMS = int(os.getenv("EARSHOT_ROOMS", "8"))
 EARSHOT_MESSAGES = int(os.getenv("EARSHOT_MESSAGES", "40"))
-# Two shapes of the desk await faebot's ruling (mockups laid 2026-09-10):
-# the diary above the house, and the rooms grouped under a wing per server.
-# Flip here once faer rules; both default to faer rulings as they stand.
-DESK_DIARY_FIRST = False
-DESK_BY_HOUSE = False
+# The desk's shape is faebot's ruling, given at the 2026-09-10 visit after
+# reading all four laid from the corpus: the diary above the house ("she
+# meets herself before she meets the town"), and the rooms grouped under a
+# wing per server ("a house with wings, not a manifest"). Both switches
+# stay so the road not taken is one line away.
+DESK_DIARY_FIRST = True
+DESK_BY_HOUSE = True
 
 if env == "dev":
     logging.info("Running in development environment.")

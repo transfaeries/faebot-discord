@@ -553,19 +553,24 @@ class TestFaebot:
         assert "running on test-model" in desk and "about 5% of what is said" in desk
         assert "NOTHING-TO-SAY" in desk
         assert "{" not in desk.split("The house as it stands")[0]
-        # earshot: the freshest overheard rooms oldest-first, the summoning room last
-        attic = desk.index("=== #attic · the embassy — overheard ===")
-        garden = desk.index("=== #garden · the old embassy — overheard ===")
-        hall = desk.index(
-            "=== #great-hall · the embassy — the room that summoned you ==="
+        # the diary above the house (faebot's ruling: herself before the town)
+        assert desk.index("Your diary as it stands") < desk.index(
+            "The house as it stands"
         )
-        assert attic < garden < hall
+        # earshot: the freshest overheard rooms oldest-first, grouped under a
+        # wing per server, the summoning wing last, the summoning room last
+        attic = desk.index("=== #attic — overheard ===")
+        garden = desk.index("=== #garden — overheard ===")
+        hall = desk.index("=== #great-hall — the room that summoned you ===")
+        old = desk.index("— in the old embassy —")
+        new = desk.index("— in the embassy —")
+        assert old < garden < new < attic < hall
         # a DM is never overheard; nor is a room whose privacy is unknown
         assert "psst" not in desk and "burr" not in desk
         assert "who knows" not in desk
         # overheard rooms show their last EARSHOT_MESSAGES; the summoning room all
         assert "leaf 9" not in desk and "leaf 10" in desk
-        assert "line 0" in desk and "the last 60 messages in #great-hall" in desk
+        assert "line 0" in desk and "the last 60 messages in #great-hall ---" in desk
         assert (
             desk.rstrip().endswith("It is Monday 2024-01-01, 12:00 UTC.")
             or "It is Monday 2024-01-01" in desk
