@@ -543,6 +543,7 @@ class TestFaebot:
             "unknown": 5.0,
         }
 
+        faebot._connection.user = faebot._user_mock
         with patch("faediscord.env", "prod"):
             desk = faebot._lay_desk(mock_message, summoning)
 
@@ -551,6 +552,7 @@ class TestFaebot:
         )
         assert "This is the house." in desk
         assert "running on test-model" in desk and "about 5% of what is said" in desk
+        assert "- in this house you are called faebot" in desk
         assert "NOTHING-TO-SAY" in desk
         assert "{" not in desk.split("The house as it stands")[0]
         # the diary above the house (faebot's ruling: herself before the town)

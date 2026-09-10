@@ -192,6 +192,7 @@ class Faebot(discord.Client):
             memory=conversation.get("history_length", 0),
             silence=generation.SENTINEL_SILENCE,
             reply_percent=int(conversation.get("reply_frequency", 0) * 100),
+            called=self.user.display_name if self.user else None,
         )
         now = f"{message.created_at.astimezone():%A %Y-%m-%d, %H:%M %Z}"
         return lay_body_desk(
