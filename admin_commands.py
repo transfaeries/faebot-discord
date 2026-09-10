@@ -295,14 +295,23 @@ async def _show_conversation_prompt(
                 f"Conversation {potential_conv_id} not found"
             )
 
-    template_name = bot.conversations[target_id].get("prompt_template", "default")
-    rendered = bot._render_prompt(template_name, message, target_id)
+    # The desk is far too long for a Discord message (tens of KB); show its
+    # skeleton — the frame's source, the rooms in earshot, the size — and
+    # log the whole thing where it can be read.
+    desk = bot._lay_desk(message, target_id)
+    logging.info(f"\n=== DESK for {target_id} ===\n{desk}\n=== END DESK ===")
+    rooms = [line for line in desk.splitlines() if line.startswith("=== ")]
+    body = bot._body_name(bot.conversations[target_id])
 
     logging.debug(
         f"Admin {message.author.name} queried prompt for conversation {target_id}"
     )
     return await message.channel.send(
-        f"**Template:** `{template_name}`\n**Rendered prompt:**\n{rendered}"
+        f"**Frame:** `frames/preamble.md` + `frames/{body}.md` (from the diary)\n"
+        f"**Rooms on the desk:**\n"
+        + "\n".join(rooms)
+        + f"\n**Desk size:** {len(desk):,} chars "
+        "(the whole desk is in the log)"
     )
 
 

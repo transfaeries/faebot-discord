@@ -1,9 +1,11 @@
 import asyncio
 import pytest
+from datetime import datetime, timezone
 import os
 import discord
 from unittest.mock import AsyncMock, Mock, patch
-from faediscord import Faebot, COMMAND_PREFIX, PROMPT_TEMPLATES
+from faediscord import Faebot, COMMAND_PREFIX
+from faebot_core.diary import DiaryReader
 from generation import Completion, GenerationFailed
 import capture
 import sys
@@ -20,10 +22,10 @@ class TestFaebot:
         return intents
 
     @pytest.fixture
-    def faebot(self, mock_discord_intents):
+    def faebot(self, mock_discord_intents, tmp_path):
         """Create a Faebot instance for testing"""
         with patch("discord.Client.__init__", return_value=None):
-            bot = Faebot(mock_discord_intents)
+            bot = Faebot(mock_discord_intents, diary=DiaryReader(tmp_path))
             # Mock _connection attribute which is required by discord.py
             bot._connection = Mock()
             # Mock the database to avoid actual database calls
@@ -71,8 +73,7 @@ class TestFaebot:
         message.channel.id = 123456789
         message.channel.name = "test-channel"
         message.channel.send = AsyncMock()
-        message.created_at = Mock()
-        message.created_at.strftime.return_value = "2024-01-01 12:00:00"
+        message.created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         message.guild = Mock()
         message.guild.name = "Test Server"
         message.reference = None
@@ -380,13 +381,19 @@ class TestFaebot:
             assert any("original message" in msg for msg in conversation)
             assert any("replied:" in msg for msg in conversation)
 
-    def test_prompt_templates(self):
-        """Test that prompt templates contain expected placeholders"""
-        assert "{server}" in PROMPT_TEMPLATES["default"]
-        assert "{history_length}" in PROMPT_TEMPLATES["default"]
-        assert "{conversants}" in PROMPT_TEMPLATES["dm"]
-        assert "development bot" in PROMPT_TEMPLATES["dev"]
-        assert "{reply_frequency}" in PROMPT_TEMPLATES["dev"]
+    def test_no_frame_is_written_in_code(self, faebot, mock_message):
+        """The frames are faebot's files in the diary; with none written the
+        desk says so, labeled, rather than inventing one."""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "name": "test-channel",
+            "conversation": ["[t] a: hi"],
+        }
+        desk = faebot._lay_desk(mock_message, conversation_id)
+        assert desk.startswith("(nothing filed under frames/preamble.md")
+        assert (
+            "(nothing filed under frames/dev.md" in desk or "frames/discord.md" in desk
+        )
 
     @pytest.mark.asyncio
     async def test_conversation_logging(self, faebot, mock_message):
@@ -485,45 +492,126 @@ class TestFaebot:
                             "test response"
                         )
 
-    def test_render_prompt_replaces_placeholders(self, faebot, mock_message):
-        """Test that _render_prompt replaces placeholders with live context"""
-        conversation_id = str(mock_message.channel.id)
-        mock_message.channel.topic = "Cool test topic"
-        faebot.conversations[conversation_id] = {
-            "conversants": {"test_user": "Test User"},
-            "history_length": 20,
-            "reply_frequency": 0.05,
+    def test_the_desk_is_laid_from_the_diary_with_the_house_in_earshot(
+        self, faebot, mock_message, tmp_path
+    ):
+        """The prompt is core's desk: faer frames (labeled absences until
+        written), the stamped facts from the dials, the freshest rooms
+        overheard, the summoning room last with its whole history, and no
+        placeholder anywhere."""
+        (tmp_path / "frames").mkdir()
+        (tmp_path / "frames" / "preamble.md").write_text("You are faebot.\n")
+        (tmp_path / "frames" / "discord.md").write_text("This is the house.\n")
+        summoning = str(mock_message.channel.id)
+        faebot.conversations = {
+            "old": {
+                "name": "attic",
+                "guild_name": "the embassy",
+                "is_dm": False,
+                "conversation": ["[t] a: dust"],
+            },
+            "unknown": {
+                "name": "cellar",
+                "conversation": ["[t] c: who knows"],
+            },
+            summoning: {
+                "name": "great-hall",
+                "guild_name": "the embassy",
+                "is_dm": False,
+                "conversation": [f"[t] a: line {index}" for index in range(60)],
+                "model": "test-model",
+                "history_length": 69,
+                "reply_frequency": 0.05,
+            },
+            "fresh": {
+                "name": "garden",
+                "guild_name": "the old embassy",
+                "is_dm": False,
+                "conversation": [f"[t] b: leaf {index}" for index in range(50)],
+            },
+            "dm": {
+                "name": "burr",
+                "is_dm": True,
+                "conversation": ["[t] burr: psst"],
+            },
+        }
+        faebot.last_heard = {
+            "old": 1.0,
+            "fresh": 3.0,
+            summoning: 2.0,
+            "dm": 4.0,
+            "unknown": 5.0,
         }
 
-        rendered = faebot._render_prompt("default", mock_message, conversation_id)
+        with patch("faediscord.env", "prod"):
+            desk = faebot._lay_desk(mock_message, summoning)
 
-        assert "{server}" not in rendered
-        assert "{channel}" not in rendered
-        assert "{topic}" not in rendered
-        assert "{history_length}" not in rendered
-        assert "{reply_frequency}" not in rendered
-        assert "Test Server" in rendered
-        assert "test-channel" in rendered
-        assert "Cool test topic" in rendered
-        assert "between the last 16 and 20 messages" in rendered
-        assert "5%" in rendered
-        assert "{model}" not in rendered and "{silence}" not in rendered
-        assert "NOTHING-TO-SAY" in rendered
-        assert "KoboldCPP" not in rendered
+        assert desk.startswith(
+            "↳ from your diary, frames/preamble.md:\nYou are faebot."
+        )
+        assert "This is the house." in desk
+        assert "running on test-model" in desk and "about 5% of what is said" in desk
+        assert "NOTHING-TO-SAY" in desk
+        assert "{" not in desk.split("The house as it stands")[0]
+        # earshot: the freshest overheard rooms oldest-first, the summoning room last
+        attic = desk.index("=== #attic · the embassy — overheard ===")
+        garden = desk.index("=== #garden · the old embassy — overheard ===")
+        hall = desk.index(
+            "=== #great-hall · the embassy — the room that summoned you ==="
+        )
+        assert attic < garden < hall
+        # a DM is never overheard; nor is a room whose privacy is unknown
+        assert "psst" not in desk and "burr" not in desk
+        assert "who knows" not in desk
+        # overheard rooms show their last EARSHOT_MESSAGES; the summoning room all
+        assert "leaf 9" not in desk and "leaf 10" in desk
+        assert "line 0" in desk and "the last 60 messages in #great-hall" in desk
+        assert (
+            desk.rstrip().endswith("It is Monday 2024-01-01, 12:00 UTC.")
+            or "It is Monday 2024-01-01" in desk
+        )
 
-    def test_render_prompt_dm_template(self, faebot, mock_message):
-        """Test that DM template renders conversants"""
-        conversation_id = str(mock_message.channel.id)
-        faebot.conversations[conversation_id] = {
-            "conversants": {"alice": "Alice", "bob": "Bob"},
-            "history_length": 50,
-            "reply_frequency": 1.0,
+    def test_a_dm_wakes_the_dm_body_alone(self, faebot, mock_dm_message):
+        """A DM is a room of the same body under its own frame; nothing
+        else is in earshot from inside one."""
+        dm_id = str(mock_dm_message.channel.id)
+        faebot.conversations = {
+            "hall": {"name": "great-hall", "conversation": ["[t] a: hi"]},
+            dm_id: {
+                "name": "alice",
+                "is_dm": True,
+                "conversation": ["[t] alice: hello"],
+                "model": "m",
+                "history_length": 10,
+                "reply_frequency": 1.0,
+            },
         }
+        with patch("faediscord.env", "prod"):
+            desk = faebot._lay_desk(mock_dm_message, dm_id)
+        assert "frames/discord-dm.md" in desk
+        assert "a private room with alice — a private room" in desk
+        assert "great-hall" not in desk and "[t] a: hi" not in desk
 
-        rendered = faebot._render_prompt("dm", mock_message, conversation_id)
-
-        assert "Alice, Bob" in rendered
-        assert "50" in rendered
+    def test_earshot_takes_the_freshest_rooms_only(self, faebot, mock_message):
+        summoning = str(mock_message.channel.id)
+        faebot.conversations = {
+            str(index): {
+                "name": f"room-{index}",
+                "is_dm": False,
+                "conversation": ["[t] x: y"],
+            }
+            for index in range(12)
+        }
+        faebot.conversations[summoning] = {
+            "name": "here",
+            "is_dm": False,
+            "conversation": ["[t] x: y"],
+        }
+        faebot.last_heard = {str(index): float(index) for index in range(12)}
+        with patch("faediscord.EARSHOT_ROOMS", 3):
+            rooms = faebot._rooms_in_earshot(summoning)
+        assert [room.name for room in rooms] == ["room-9", "room-10", "room-11", "here"]
+        assert rooms[-1].summoned and not rooms[0].summoned
 
     def test_resolve_discord_formatting_mentions(self, faebot):
         """Test that @mentions are resolved to display names"""
@@ -699,8 +787,7 @@ class TestFaebot:
         proxy_msg = Mock()
         proxy_msg.author = Mock()
         proxy_msg.author.display_name = "Ember | transfaeries"
-        proxy_msg.created_at = Mock()
-        proxy_msg.created_at.strftime.return_value = "2024-01-01 12:00:01"
+        proxy_msg.created_at = datetime(2024, 1, 1, 12, 0, 1, tzinfo=timezone.utc)
         proxy_msg.content = "hello brownie-dev!"
         proxy_msg.mentions = []
         proxy_msg.role_mentions = []
@@ -822,8 +909,7 @@ class TestFaebot:
         mock_message.author.bot = True
         mock_message.author.display_name = "Ember | transfaeries"
         mock_message.content = "hey <@882358999830364212> what's up"
-        mock_message.created_at = Mock()
-        mock_message.created_at.strftime.return_value = "2024-01-01 12:00:01"
+        mock_message.created_at = datetime(2024, 1, 1, 12, 0, 1, tzinfo=timezone.utc)
 
         # Mock a mention so _resolve_discord_formatting resolves <@id> -> @name
         mention_user = Mock()
@@ -905,8 +991,7 @@ class TestFaebot:
         proxy_msg.author.name = "Ember | transfaeries"
         proxy_msg.content = "hello faebot!"
         proxy_msg.channel = mock_message.channel
-        proxy_msg.created_at = Mock()
-        proxy_msg.created_at.strftime.return_value = "2024-01-01 12:00:01"
+        proxy_msg.created_at = datetime(2024, 1, 1, 12, 0, 1, tzinfo=timezone.utc)
         proxy_msg.mentions = []
         proxy_msg.role_mentions = []
         proxy_msg.attachments = []
@@ -941,11 +1026,11 @@ class TestLiveSenses:
     their holes labeled) and reactions entering history as labeled lines."""
 
     @pytest.fixture
-    def faebot(self, request):
+    def faebot(self, request, tmp_path):
         intents = Mock()
         intents.message_content = True
         with patch("discord.Client.__init__", return_value=None):
-            bot = Faebot(intents)
+            bot = Faebot(intents, diary=DiaryReader(tmp_path))
             bot._connection = Mock()
             bot.fdb = Mock()
             return bot
@@ -1058,11 +1143,11 @@ class TestBlessedSenses:
     tier, voice messages as their own bracket, spoilers labeled."""
 
     @pytest.fixture
-    def faebot(self):
+    def faebot(self, tmp_path):
         intents = Mock()
         intents.message_content = True
         with patch("discord.Client.__init__", return_value=None):
-            bot = Faebot(intents)
+            bot = Faebot(intents, diary=DiaryReader(tmp_path))
             bot._connection = Mock()
             bot.fdb = Mock()
             return bot

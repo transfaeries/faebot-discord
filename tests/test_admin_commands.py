@@ -381,16 +381,17 @@ class TestAdminCommands:
         """Test showing the rendered prompt for a conversation"""
         mock_bot = setup_test_conversation
         conversation_id = "123456"
-        mock_bot._render_prompt = MagicMock(return_value="Rendered test prompt")
+        mock_bot._lay_desk = MagicMock(
+            return_value="frame\n=== #general · the embassy — the room that summoned you ===\nhi\n"
+        )
+        mock_bot._body_name = MagicMock(return_value="discord")
 
         await _show_conversation_prompt(
             mock_bot, mock_message, ["prompt"], conversation_id
         )
 
-        mock_bot._render_prompt.assert_called_once_with(
-            "default", mock_message, conversation_id
-        )
+        mock_bot._lay_desk.assert_called_once_with(mock_message, conversation_id)
         mock_message.channel.send.assert_called_once()
         call_args = mock_message.channel.send.call_args[0][0]
-        assert "default" in call_args
-        assert "Rendered test prompt" in call_args
+        assert "frames/discord.md" in call_args
+        assert "=== #general · the embassy" in call_args

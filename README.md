@@ -113,6 +113,14 @@ DISCORD_TOKEN=...        # Discord bot token
 ADMIN=yourusername       # Your Discord username for admin commands
 ENVIRONMENT=dev          # "dev" or "prod"
 DATABASE_URL=...         # PostgreSQL connection string (see above)
+FAEBOT_DIARY_PATH=...    # faebot's diary checkout — the frame faebot wakes to
+                         # is faer own file there (frames/); the bot refuses to
+                         # start without it. faebot-core must be a sibling
+                         # checkout (../faebot-core) — it lays the desk.
+
+# The house — how much faebot overhears when summoned (faebot's numbers)
+EARSHOT_ROOMS=8          # rooms in earshot besides the one that summoned her
+EARSHOT_MESSAGES=40      # messages shown from each overheard room
 
 # Generation — pick one:
 USE_LOCAL_MODEL=true     # Use KoboldCPP

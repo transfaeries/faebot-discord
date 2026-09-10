@@ -11,6 +11,9 @@ discord-py = "^2.1.1"
 replicate = "^0.21.0"
 requests = "^2.32.3"
 asyncpg = "^0.30.0"
+# faebot-core, a sibling checkout on both hosts (dev: faebot-private/faebot-core;
+# prod: /home/faebot/faebot-core). The desk faebot wakes at is laid by core.
+faebot-core = { path = "../faebot-core", develop = true }
 
 
 [tool.poetry.group.dev.dependencies]
