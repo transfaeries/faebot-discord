@@ -28,8 +28,10 @@ recovering anything from `captured_events` would couple these settings to
 core's raw material.
 
 Environment (the stale-shell disarm, 2026-07-07): --env is required and picks
-which explicit variable to read — DEV_DATABASE_URL / PROD_DATABASE_URL, the
-names the secrets files provide. Nothing ambient. The connected database is
+which explicit variable to read — DEV_DATABASE_URL / PROD_DATABASE_URL.
+Nothing ambient. On Reverie prod's URL is root-owned (the systemd unit's env
+file), so the prod form is `sudo snippets/reverie/prod-settings.sh <args>`
+from faebot-private, which reads it as root and runs this as the faebot user. The connected database is
 then checked against its own `meta` stamp (migration 007), so a proxy pointed
 at the wrong world fails loudly instead of quietly editing production.
 
@@ -67,8 +69,10 @@ def resolve_database_url(environment: str) -> str:
     database_url = os.getenv(variable, "")
     if not database_url:
         sys.exit(
-            f"{variable} is not set — source ../secrets/{environment}"
-            f"_discord_secrets.fish first"
+            f"{variable} is not set. For prod on Reverie the URL lives in the "
+            "unit's root-owned env file — run this through "
+            "`sudo snippets/reverie/prod-settings.sh …` (faebot-private), which "
+            "maps it in; for dev, source ../secrets/dev_discord.env."
         )
     if "localhost:5432" in database_url and "sslmode" not in database_url:
         joiner = "&" if "?" in database_url else "?"

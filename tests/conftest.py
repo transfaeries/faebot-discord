@@ -2,6 +2,7 @@ import pytest
 import discord
 from unittest.mock import AsyncMock, Mock
 import aiohttp
+from datetime import datetime, timezone
 
 
 @pytest.fixture
@@ -21,8 +22,7 @@ def mock_message():
     message.channel.id = 123456789
     message.channel.name = "test-channel"
     message.channel.type = ["text"]
-    message.created_at = Mock()
-    message.created_at.strftime.return_value = "2024-01-01 12:00:00"
+    message.created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     message.guild = Mock()
     message.guild.name = "Test Server"
     message.reference = None
@@ -39,8 +39,7 @@ def mock_dm_message():
     message.channel = Mock()
     message.channel.id = 987654321
     message.channel.type = ["private"]
-    message.created_at = Mock()
-    message.created_at.strftime.return_value = "2024-01-01 12:00:00"
+    message.created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     message.reference = None
     return message
 
