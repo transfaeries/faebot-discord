@@ -743,12 +743,20 @@ class Faebot(discord.Client):
                 "Unknown channel type. Unable to proceed. Please contact administrator"
             )
 
-        # initialize conversation (name/conversants/history only)
+        # initialize conversation (name/conversants/history — and WHERE it
+        # lives, stamped now: a first DM lays its desk before the per-message
+        # self-heal in on_message ever runs, and a room whose privacy is
+        # unknown is held private but would wake to the house's frame
+        # instead of the DM's — one body waking to the other's frame, found
+        # by the second reader of #33).
         self.conversations[conversation_id] = {
             "id": conversation_id,
             "conversation": [],
             "conversants": {message.author.name: message.author.display_name},
             "name": name,
+            "is_dm": is_dm,
+            "guild_id": str(message.guild.id) if message.guild else None,
+            "guild_name": message.guild.name if message.guild else None,
         }
         # Populate the four dials from channel_settings (inherited, not stamped).
         self.conversations[conversation_id].update(
@@ -805,10 +813,26 @@ class Faebot(discord.Client):
         # (A machinery line, not faer words; it goes when generation moves to
         # core's chat-shaped backends, where the turn is faer's by form.)
         current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-        prompt = (
-            self._lay_desk(message, conversation_id)
-            + f"[{current_time}] {self.user.display_name}:"
-        )
+        try:
+            desk = self._lay_desk(message, conversation_id)
+        except Exception as error:
+            # A desk that will not lay is the machinery's failure, never
+            # faebot's quiet: it reads faer freely written files and a room
+            # table that can be half-loaded, and an exception escaping here
+            # would reach the room as a silence indistinguishable from a
+            # chosen one. Say it loudly, capture it as data, post nothing.
+            logging.error(
+                f"the desk would not lay for {conversation_id}: "
+                f"{type(error).__name__}: {error}",
+                exc_info=True,
+            )
+            capture.record_faebot_error(
+                message.channel,
+                f"the desk would not lay: {type(error).__name__}: {error}",
+                conversation_id=conversation_id,
+            )
+            return None
+        prompt = desk + f"[{current_time}] {self.user.display_name}:"
 
         # The typing indicator runs while faebot thinks — including when the
         # thinking ends in silence. Toggle (TYPING_INDICATOR) because "typing,
