@@ -602,6 +602,68 @@ class TestFaebot:
         assert "a private room with alice — a private room" in desk
         assert "great-hall" not in desk and "[t] a: hi" not in desk
 
+    @pytest.mark.asyncio
+    async def test_a_first_dm_wakes_the_dm_body(self, faebot, mock_dm_message):
+        """A brand-new DM lays its desk before on_message's per-message
+        self-heal has ever stamped where it lives — so its birth stamps it:
+        held private AND under the DM's frame, not the house's. (The second
+        reader of #33 found a fresh DM waking to frames/discord.md.)"""
+        mock_dm_message.channel = Mock(spec=discord.DMChannel)
+        mock_dm_message.channel.id = 987654321
+        mock_dm_message.channel.send = AsyncMock()
+        mock_dm_message.author.display_name = "alice"
+        mock_dm_message.guild = None
+        faebot._connection.user = faebot._user_mock
+        dm_id = str(mock_dm_message.channel.id)
+
+        await faebot._initialize_conversation(mock_dm_message, conversation_id=dm_id)
+
+        conversation = faebot.conversations[dm_id]
+        assert conversation["is_dm"] is True
+        assert conversation["guild_id"] is None and conversation["guild_name"] is None
+        with patch("faediscord.env", "prod"):
+            assert faebot._body_name(conversation) == "discord-dm"
+        assert faebot._is_private(conversation)
+
+    @pytest.mark.asyncio
+    async def test_a_desk_that_will_not_lay_is_captured_not_silent(
+        self, faebot, mock_message
+    ):
+        """If laying the desk raises, the room must never see a silence that
+        looks chosen: the failure is captured as faebot_error, nothing is
+        generated, nothing is posted."""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {},
+            "conversation": ["[2024-01-01 12:00:00] a: hi"],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "model": "test-model",
+        }
+        faebot._connection.user = faebot._user_mock
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch("faediscord.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                with patch.object(
+                    faebot, "_lay_desk", side_effect=RuntimeError("frames unreadable")
+                ):
+                    with patch.object(
+                        faebot, "_generate_reply", new_callable=AsyncMock
+                    ) as generate:
+                        with patch.object(capture, "record_faebot_error") as record:
+                            result = await faebot._handle_conversation(
+                                mock_message, conversation_id
+                            )
+
+        assert result is None
+        generate.assert_not_called()
+        mock_message.channel.send.assert_not_called()
+        record.assert_called_once()
+        assert (
+            "the desk would not lay: RuntimeError: frames unreadable"
+            in record.call_args[0][1]
+        )
+
     def test_earshot_takes_the_freshest_rooms_only(self, faebot, mock_message):
         summoning = str(mock_message.channel.id)
         faebot.conversations = {
