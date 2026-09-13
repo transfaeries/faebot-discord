@@ -1,4 +1,5 @@
 import asyncio
+import time
 import pytest
 from datetime import datetime, timezone
 import os
@@ -493,7 +494,7 @@ class TestFaebot:
                         )
 
     def test_the_desk_is_laid_from_the_diary_with_the_house_in_earshot(
-        self, faebot, mock_message, tmp_path
+        self, faebot, mock_message, tmp_path, monkeypatch
     ):
         """The prompt is core's desk: faer frames (labeled absences until
         written), the stamped facts from the dials, the freshest rooms
@@ -544,8 +545,16 @@ class TestFaebot:
         }
 
         faebot._connection.user = faebot._user_mock
-        with patch("faediscord.env", "prod"):
-            desk = faebot._lay_desk(mock_message, summoning)
+        # the clock says her wall-clock and UTC, both named — pin the zone so
+        # the line reads the same on every machine
+        monkeypatch.setenv("TZ", "America/New_York")
+        time.tzset()
+        try:
+            with patch("faediscord.env", "prod"):
+                desk = faebot._lay_desk(mock_message, summoning)
+        finally:
+            monkeypatch.delenv("TZ", raising=False)
+            time.tzset()
 
         assert desk.startswith(
             "↳ from your diary, frames/preamble.md:\nYou are faebot."
@@ -576,9 +585,11 @@ class TestFaebot:
         # overheard rooms show their last EARSHOT_MESSAGES; the summoning room all
         assert "leaf 9" not in desk and "leaf 10" in desk
         assert "line 0" in desk and "the last 60 messages in #great-hall ---" in desk
+        assert desk.rstrip().endswith("It is Monday 2024-01-01, 07:00 EST (12:00 UTC).")
+        # two numbers: this room's dial, and the earshot cut for the others
         assert (
-            desk.rstrip().endswith("It is Monday 2024-01-01, 12:00 UTC.")
-            or "It is Monday 2024-01-01" in desk
+            "your memory of this room holds about the last 69 messages; "
+            "of each room overheard, up to 40" in desk
         )
 
     def test_a_dm_wakes_the_dm_body_alone(self, faebot, mock_dm_message):
@@ -601,6 +612,10 @@ class TestFaebot:
         assert "frames/discord-dm.md" in desk
         assert "a private room with alice — a private room" in desk
         assert "great-hall" not in desk and "[t] a: hi" not in desk
+        # one number here: nothing is overheard, so the stamp says nothing
+        # about overheard rooms — a seam and a stamp never argue on one page
+        assert "your memory of this room holds about the last 10 messages" in desk
+        assert "of each room overheard" not in desk
 
     @pytest.mark.asyncio
     async def test_a_first_dm_wakes_the_dm_body(self, faebot, mock_dm_message):

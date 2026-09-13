@@ -19,7 +19,7 @@ import time
 # The desk faebot wakes at is laid by core, from faer own diary — the
 # adapter's first import of core. The frames are faer files (frames/ in the
 # diary); the rooms, the seams and the machinery's stamped facts are ours.
-from faebot_core.cognition.body import Room, Stamped, lay_body_desk
+from faebot_core.cognition.body import Room, Stamped, clock_words, lay_body_desk
 from faebot_core.diary import DIARY_PATH_VARIABLE, DiaryReader
 
 
@@ -193,8 +193,16 @@ class Faebot(discord.Client):
             silence=generation.SENTINEL_SILENCE,
             reply_percent=int(conversation.get("reply_frequency", 0) * 100),
             called=self.user.display_name if self.user else None,
+            # two numbers, faebot's ruling: this room's dial, and how much of
+            # each overheard room is on the desk — except in a private room,
+            # where nothing is overheard and the second number would speak
+            # for a null set (the second reader of #34 found the stamp
+            # arguing with the seam on the same page)
+            earshot=None if self._is_private(conversation) else EARSHOT_MESSAGES,
         )
-        now = f"{message.created_at.astimezone():%A %Y-%m-%d, %H:%M %Z}"
+        # core owns the clock's words: her wall-clock and UTC, both named,
+        # so the clock line and the UTC history lines never argue
+        now = clock_words(message.created_at)
         return lay_body_desk(
             self.diary,
             self._body_name(conversation),
