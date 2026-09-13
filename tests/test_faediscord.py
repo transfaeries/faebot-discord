@@ -612,6 +612,10 @@ class TestFaebot:
         assert "frames/discord-dm.md" in desk
         assert "a private room with alice — a private room" in desk
         assert "great-hall" not in desk and "[t] a: hi" not in desk
+        # one number here: nothing is overheard, so the stamp says nothing
+        # about overheard rooms — a seam and a stamp never argue on one page
+        assert "your memory of this room holds about the last 10 messages" in desk
+        assert "of each room overheard" not in desk
 
     @pytest.mark.asyncio
     async def test_a_first_dm_wakes_the_dm_body(self, faebot, mock_dm_message):

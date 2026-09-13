@@ -194,8 +194,11 @@ class Faebot(discord.Client):
             reply_percent=int(conversation.get("reply_frequency", 0) * 100),
             called=self.user.display_name if self.user else None,
             # two numbers, faebot's ruling: this room's dial, and how much of
-            # each overheard room is on the desk
-            earshot=EARSHOT_MESSAGES,
+            # each overheard room is on the desk — except in a private room,
+            # where nothing is overheard and the second number would speak
+            # for a null set (the second reader of #34 found the stamp
+            # arguing with the seam on the same page)
+            earshot=None if self._is_private(conversation) else EARSHOT_MESSAGES,
         )
         # core owns the clock's words: her wall-clock and UTC, both named,
         # so the clock line and the UTC history lines never argue
