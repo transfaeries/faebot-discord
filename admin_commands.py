@@ -234,30 +234,30 @@ async def _set_reply_frequency(bot, message, message_tokens, conversation_id):
 @admin_command("catchup")
 async def _catch_up(bot, message, message_tokens, conversation_id):
     """Read back what the house said while faebot was deaf. Usage:
-    fae;catchup <since, ISO-8601 with zone> — the window runs from `since` to
-    now, every room the body keeps. The automatic version runs on a fresh
-    gateway session; this is the hand-cranked one, for a hole the clock
-    missed (a restart, a reboot) and for testing the mending live."""
-    if len(message_tokens) < 2:
-        return await message.channel.send(
-            "usage: catchup <since> — e.g. catchup 2026-09-20T17:00:28Z"
-        )
-    try:
-        since = datetime.datetime.fromisoformat(
-            message_tokens[1].replace("Z", "+00:00")
-        )
-    except ValueError:
-        return await message.channel.send(
-            "since must be ISO-8601, e.g. 2026-09-20T17:00:28Z"
-        )
-    if since.tzinfo is None:
-        return await message.channel.send("since needs a zone (Z or +00:00)")
+    fae;catchup [since] — with a moment (ISO-8601 with zone), every room the
+    body keeps reads from there to now; without one, each room reads from
+    its own last line (capped at a few days). The automatic version runs on
+    a fresh gateway session; this is the hand-cranked one, for a hole the
+    clock missed (a restart, a reboot) and for testing the mending live."""
+    since = None
+    if len(message_tokens) > 1:
+        try:
+            since = datetime.datetime.fromisoformat(
+                message_tokens[1].replace("Z", "+00:00")
+            )
+        except ValueError:
+            return await message.channel.send(
+                "since must be ISO-8601, e.g. 2026-09-20T17:00:28Z"
+            )
+        if since.tzinfo is None:
+            return await message.channel.send("since needs a zone (Z or +00:00)")
     count = await bot._catch_up(since=since)
+    window = f"since {since.isoformat()}" if since else "from each room's last line"
     logging.info(
-        f"Admin {message.author.name} ran catchup since {since.isoformat()}: {count} read later"
+        f"Admin {message.author.name} ran catchup {window}: {count} read later"
     )
     return await message.channel.send(
-        f"read later: {count} message{'s' if count != 1 else ''} since {since.isoformat()}"
+        f"read later: {count} message{'s' if count != 1 else ''} {window}"
     )
 
 

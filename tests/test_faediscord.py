@@ -1,7 +1,7 @@
 import asyncio
 import time
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import discord
 from unittest.mock import AsyncMock, Mock, patch
@@ -219,7 +219,38 @@ class TestFaebot:
         faebot.fdb.save_conversation.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_catch_up_without_a_drop_reads_nothing(self, faebot):
+    async def test_catch_up_without_a_clock_reads_from_each_rooms_last_line(
+        self, faebot
+    ):
+        """A restart has no disconnect stamp: the room's own last line is the
+        window's start — and it must be recent, or the room is skipped."""
+        room = self._room_and_channel(faebot, [("Dawn", "more tea")])
+        seen_windows = []
+        channel = faebot.get_channel.return_value
+        original = channel.history
+
+        def history(**kwargs):
+            seen_windows.append(kwargs["after"])
+            return original(**kwargs)
+
+        channel.history = history
+        recent = datetime(2026, 9, 20, 13, 0, 0, tzinfo=timezone.utc)
+        with patch.object(capture, "record"), patch.object(
+            capture, "serialize_message", return_value={"id": 1}
+        ), patch("discord.utils.utcnow", return_value=recent + timedelta(hours=5)):
+            assert await faebot._catch_up() == 1
+        assert seen_windows == [recent]
+        assert room["conversation"][1].startswith(
+            "[2026-09-20 13:00:00] [lost connection — read back from each room's last line"
+        )
+        # The same room, weeks later: older than the cap — left alone.
+        room["conversation"] = ["[2026-08-01 13:00:00] Dawn: tea"]
+        with patch.object(capture, "record") as record:
+            assert await faebot._catch_up() == 0
+        record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_catch_up_with_nothing_to_read(self, faebot):
         with patch.object(capture, "record") as record:
             assert await faebot._catch_up() == 0
         record.assert_not_called()

@@ -499,6 +499,22 @@ class Faebot(discord.Client):
     # for recover_history.py's output — the diary's half mends itself.
 
     SUMMONS = re.compile(r"\bfae(bot)?\b", re.IGNORECASE)
+    LINE_STAMP = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
+    # Without a clock (a restart: the process has no memory of going down),
+    # each room reads back from its own last line — capped, so a room quiet
+    # for weeks cannot flood the captures. An explicit `since` bypasses it.
+    CATCH_UP_MAX_LOOKBACK = datetime.timedelta(days=3)
+
+    def _last_heard_at(self, conversation) -> Optional[datetime.datetime]:
+        """The stamp on the room's last stamped line, UTC — the last thing
+        the body heard there. None for an empty room."""
+        for line in reversed(conversation.get("conversation", [])):
+            match = self.LINE_STAMP.match(line)
+            if match:
+                return datetime.datetime.strptime(
+                    match.group(1), "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=datetime.timezone.utc)
+        return None
 
     def _recovered_line(self, message) -> str:
         """A message read after the fact, in the live history's own dialect."""
@@ -513,26 +529,49 @@ class Faebot(discord.Client):
         return f"[{when}] {author}{verb} {content}  {mark}"
 
     async def _catch_up(self, since: Optional[datetime.datetime] = None) -> int:
-        """Read back what every room said while faebot was deaf, from the
-        disconnect (or `since`) to now. Rooms nothing was said in get no seam
-        — no wound to dress. Returns how many messages were read later."""
+        """Read back what every room said while faebot was deaf: from the
+        disconnect (or `since`) to now — or, with neither, from each room's
+        own last line, capped. Rooms nothing was said in get no seam — no
+        wound to dress. Returns how many messages were read later."""
         now = discord.utils.utcnow()
         lost_at = since or self.disconnected_at
         self.disconnected_at = None
-        if lost_at is None:
-            logging.info("catch-up: no disconnect on record — nothing to read")
+        if lost_at is not None:
+            reason = "gateway session lost and not resumed"
+            if since is not None:
+                reason = "read back by hand, from a given moment"
+        else:
+            reason = "read back from each room's last line (a restart, or a hole the clock did not see)"
+        floor = now - self.CATCH_UP_MAX_LOOKBACK
+        windows: Dict[str, datetime.datetime] = {}
+        for conversation_id, conversation in self.conversations.items():
+            after = lost_at or self._last_heard_at(conversation)
+            if after is None:
+                continue
+            if lost_at is None and after < floor:
+                logging.info(
+                    f"catch-up: #{conversation.get('name', conversation_id)} last heard "
+                    f"{after:%Y-%m-%d %H:%M} — older than the lookback cap, skipped "
+                    "(give catchup a moment to read from there)"
+                )
+                continue
+            windows[conversation_id] = after
+        if not windows:
+            logging.info("catch-up: nothing to read")
             return 0
+        earliest = min(windows.values())
         marker = {
             "read_at": now.isoformat(),
-            "after": lost_at.isoformat(),
+            "after": earliest.isoformat(),
             "before": now.isoformat(),
-            "reason": "gateway session lost and not resumed",
+            "reason": reason,
         }
         capture.record(
-            "connection_lost", {"ts": lost_at.isoformat(), "recovered": marker}
+            "connection_lost", {"ts": earliest.isoformat(), "recovered": marker}
         )
         total = 0
-        for conversation_id, conversation in list(self.conversations.items()):
+        for conversation_id, after in windows.items():
+            conversation = self.conversations[conversation_id]
             channel = self.get_channel(int(conversation_id))
             if channel is None:
                 try:
@@ -548,7 +587,7 @@ class Faebot(discord.Client):
             lines: List[str] = []
             try:
                 async for message in channel.history(
-                    after=lost_at, before=now, limit=None, oldest_first=True
+                    after=after, before=now, limit=None, oldest_first=True
                 ):
                     if (
                         message.author == self.user
@@ -577,7 +616,7 @@ class Faebot(discord.Client):
                 continue
             plural = "s" if len(lines) != 1 else ""
             block = [
-                f"[{lost_at:%Y-%m-%d %H:%M:%S}] [lost connection — {marker['reason']}. "
+                f"[{after:%Y-%m-%d %H:%M:%S}] [lost connection — {reason}. "
                 "What follows, until the connection returns, was read afterwards, not lived.]",
                 *lines,
                 f"[{now:%Y-%m-%d %H:%M:%S}] [connection restored. Lived again from here. "
@@ -597,7 +636,7 @@ class Faebot(discord.Client):
         )
         logging.info(
             f"catch-up: {total} message{'s' if total != 1 else ''} read later across the house "
-            f"({lost_at:%H:%M:%S} → {now:%H:%M:%S} UTC)"
+            f"({earliest:%H:%M:%S} → {now:%H:%M:%S} UTC)"
         )
         return total
 
