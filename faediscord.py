@@ -565,17 +565,17 @@ class Faebot(discord.Client):
         if not windows:
             logging.info("catch-up: nothing to read")
             return 0
-        earliest = min(windows.values())
         marker = {
             "read_at": now.isoformat(),
-            "after": earliest.isoformat(),
+            "after": min(windows.values()).isoformat(),
             "before": now.isoformat(),
             "reason": reason,
         }
-        capture.record(
-            "connection_lost", {"ts": earliest.isoformat(), "recovered": marker}
-        )
         total = 0
+        # The diary's seams bracket what was actually read: the lost-connection
+        # bookend sits at the earliest window among rooms that HAD something
+        # (a room quiet since yesterday must not put a seam in yesterday).
+        earliest: Optional[datetime.datetime] = None
         for conversation_id, after in windows.items():
             conversation = self.conversations[conversation_id]
             channel = self.get_channel(int(conversation_id))
@@ -629,6 +629,7 @@ class Faebot(discord.Client):
                 f"({len(lines)} message{plural} above read later, none answered)]",
             ]
             conversation["conversation"][mark:mark] = block
+            earliest = after if earliest is None else min(earliest, after)
             self._trim_conversation_history(conversation_id)
             self.last_heard[conversation_id] = time.monotonic()
             if await self.fdb.save_conversation(conversation_id, conversation):
@@ -637,6 +638,13 @@ class Faebot(discord.Client):
             logging.info(
                 f"catch-up: #{conversation.get('name', conversation_id)} — {len(lines)} read later"
             )
+        if earliest is None:
+            logging.info("catch-up: nothing was said while the line was down")
+            return 0
+        marker["after"] = earliest.isoformat()
+        capture.record(
+            "connection_lost", {"ts": earliest.isoformat(), "recovered": marker}
+        )
         capture.record(
             "connection_restored", {"ts": now.isoformat(), "recovered": marker}
         )

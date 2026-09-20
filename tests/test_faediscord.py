@@ -203,22 +203,26 @@ class TestFaebot:
         assert len(history) == 5
         faebot.fdb.save_conversation.assert_awaited_once()
         kinds = [call.args[0] for call in record.call_args_list]
-        assert kinds == ["connection_lost", "message", "message", "connection_restored"]
-        first_message = record.call_args_list[1].args[1]
+        assert kinds == ["message", "message", "connection_lost", "connection_restored"]
+        first_message = record.call_args_list[0].args[1]
         assert first_message["ts"] == "2026-09-20T17:30:00+00:00"
         assert first_message["recovered"]["after"] == "2026-09-20T17:00:28+00:00"
+        lost = record.call_args_list[2].args[1]
+        assert lost["ts"] == "2026-09-20T17:00:28+00:00"
 
     @pytest.mark.asyncio
     async def test_catch_up_leaves_quiet_rooms_alone(self, faebot):
         """No messages in the window: no seams — no wound to dress."""
         room = self._room_and_channel(faebot, [])
-        with patch.object(capture, "record"):
+        with patch.object(capture, "record") as record:
             count = await faebot._catch_up(
                 since=datetime(2026, 9, 20, 17, 0, tzinfo=timezone.utc)
             )
         assert count == 0
         assert room["conversation"] == ["[2026-09-20 13:00:00] Dawn: tea"]
         faebot.fdb.save_conversation.assert_not_awaited()
+        # No bookends either: a seam with nothing between it is a false wound.
+        record.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_catch_up_without_a_clock_reads_from_each_rooms_last_line(
