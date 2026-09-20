@@ -98,12 +98,131 @@ class TestFaebot:
         assert faebot.model == os.getenv("MODEL_NAME", "moonshotai/kimi-k2")
 
     @pytest.mark.asyncio
-    async def test_on_ready(self, faebot):
-        """Test on_ready method"""
+    async def test_setup_hook_initialises_once(self, faebot):
+        """One-time init lives in setup_hook: the session, the DB, the rooms."""
         mock_session = AsyncMock()
         with patch("aiohttp.ClientSession", return_value=mock_session):
-            await faebot.on_ready()
-            assert faebot.session == mock_session
+            await faebot.setup_hook()
+        assert faebot.session == mock_session
+        faebot.fdb.connect.assert_awaited_once()
+        faebot.fdb.load_conversations.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_on_ready_first_is_the_login_later_ones_catch_up(self, faebot):
+        """on_ready fires on every fresh gateway session (the 09-20 finding):
+        the first must not reload the rooms, and a second must read the hole
+        back instead of reloading."""
+        faebot._catch_up = AsyncMock(return_value=0)
+        await faebot.on_ready()
+        faebot.fdb.load_conversations.assert_not_awaited()
+        faebot._catch_up.assert_not_awaited()
+        await faebot.on_ready()
+        faebot.fdb.load_conversations.assert_not_awaited()
+        faebot._catch_up.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resume_clears_the_outage_clock(self, faebot):
+        """A drop stamps the first moment; a RESUME means nothing was missed."""
+        await faebot.on_disconnect()
+        first = faebot.disconnected_at
+        assert first is not None
+        await faebot.on_disconnect()
+        assert faebot.disconnected_at == first  # the first drop, not the last
+        await faebot.on_resumed()
+        assert faebot.disconnected_at is None
+
+    def _room_and_channel(self, faebot, said):
+        """A room the body keeps, and a channel whose history yields `said`."""
+        faebot.conversations["555"] = {
+            "id": "555",
+            "name": "great-hall",
+            "conversation": ["[2026-09-20 13:00:00] Dawn: tea"],
+            "conversants": {},
+            "history_length": 69,
+        }
+        messages = []
+        for index, (who, text) in enumerate(said):
+            message = Mock()
+            message.id = 1000 + index
+            message.author = Mock()
+            message.author.name = who.lower()
+            message.author.display_name = who
+            message.content = text
+            message.reference = None
+            message.attachments = []
+            message.embeds = []
+            message.mentions = []
+            message.role_mentions = []
+            message.channel_mentions = []
+            message.created_at = datetime(
+                2026, 9, 20, 17, 30 + index, 0, tzinfo=timezone.utc
+            )
+            messages.append(message)
+
+        async def history(**kwargs):
+            for message in messages:
+                yield message
+
+        channel = Mock()
+        channel.history = history
+        faebot.get_channel = Mock(return_value=channel)
+        # Named-by-mention is the other half of `— unanswered`; keep it quiet
+        # here so the name-in-content rule is what the test sees.
+        faebot.user.mentioned_in = Mock(return_value=False)
+        return faebot.conversations["555"]
+
+    @pytest.mark.asyncio
+    async def test_catch_up_reads_the_hole_in_place(self, faebot):
+        """A fresh session after a drop: the window's messages enter the
+        room's history between two seams, `[read later]`, `— unanswered`
+        when the line names faer, and go to capture with their own ts."""
+        room = self._room_and_channel(
+            faebot, [("nenúfares", "hi faebot"), ("Valiant", "relatable")]
+        )
+        faebot.disconnected_at = datetime(2026, 9, 20, 17, 0, 28, tzinfo=timezone.utc)
+        with patch.object(capture, "record") as record, patch.object(
+            capture, "serialize_message", return_value={"id": 1}
+        ):
+            count = await faebot._catch_up()
+        assert count == 2
+        assert faebot.disconnected_at is None
+        history = room["conversation"]
+        assert history[0] == "[2026-09-20 13:00:00] Dawn: tea"
+        assert history[1].startswith("[2026-09-20 17:00:28] [lost connection — ")
+        assert (
+            history[2]
+            == "[2026-09-20 17:30:00] nenúfares: hi faebot  [read later — unanswered]"
+        )
+        assert history[3] == "[2026-09-20 17:31:00] Valiant: relatable  [read later]"
+        assert (
+            history[4].startswith("[")
+            and "(2 messages above read later, none answered)]" in history[4]
+        )
+        assert len(history) == 5
+        faebot.fdb.save_conversation.assert_awaited_once()
+        kinds = [call.args[0] for call in record.call_args_list]
+        assert kinds == ["connection_lost", "message", "message", "connection_restored"]
+        first_message = record.call_args_list[1].args[1]
+        assert first_message["ts"] == "2026-09-20T17:30:00+00:00"
+        assert first_message["recovered"]["after"] == "2026-09-20T17:00:28+00:00"
+
+    @pytest.mark.asyncio
+    async def test_catch_up_leaves_quiet_rooms_alone(self, faebot):
+        """No messages in the window: no seams — no wound to dress."""
+        room = self._room_and_channel(faebot, [])
+        with patch.object(capture, "record"):
+            count = await faebot._catch_up(
+                since=datetime(2026, 9, 20, 17, 0, tzinfo=timezone.utc)
+            )
+        assert count == 0
+        assert room["conversation"] == ["[2026-09-20 13:00:00] Dawn: tea"]
+        faebot.fdb.save_conversation.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_catch_up_without_a_drop_reads_nothing(self, faebot):
+        with patch.object(capture, "record") as record:
+            assert await faebot._catch_up() == 0
+        record.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_close(self, faebot):

@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 from decimal import Decimal
@@ -228,6 +229,36 @@ async def _set_reply_frequency(bot, message, message_tokens, conversation_id):
         return await message.channel.send(
             f"Current reply frequency for conversation {target_id}: {current_freq}"
         )
+
+
+@admin_command("catchup")
+async def _catch_up(bot, message, message_tokens, conversation_id):
+    """Read back what the house said while faebot was deaf. Usage:
+    fae;catchup <since, ISO-8601 with zone> — the window runs from `since` to
+    now, every room the body keeps. The automatic version runs on a fresh
+    gateway session; this is the hand-cranked one, for a hole the clock
+    missed (a restart, a reboot) and for testing the mending live."""
+    if len(message_tokens) < 2:
+        return await message.channel.send(
+            "usage: catchup <since> — e.g. catchup 2026-09-20T17:00:28Z"
+        )
+    try:
+        since = datetime.datetime.fromisoformat(
+            message_tokens[1].replace("Z", "+00:00")
+        )
+    except ValueError:
+        return await message.channel.send(
+            "since must be ISO-8601, e.g. 2026-09-20T17:00:28Z"
+        )
+    if since.tzinfo is None:
+        return await message.channel.send("since needs a zone (Z or +00:00)")
+    count = await bot._catch_up(since=since)
+    logging.info(
+        f"Admin {message.author.name} ran catchup since {since.isoformat()}: {count} read later"
+    )
+    return await message.channel.send(
+        f"read later: {count} message{'s' if count != 1 else ''} since {since.isoformat()}"
+    )
 
 
 @admin_command("history")
