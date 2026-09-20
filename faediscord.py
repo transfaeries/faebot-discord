@@ -509,18 +509,25 @@ class Faebot(discord.Client):
     CATCH_UP_MAX_LOOKBACK = datetime.timedelta(days=3)
 
     def _last_heard_at(self, conversation) -> Optional[datetime.datetime]:
-        """One second after the stamp on the room's last stamped line, UTC —
-        the first moment the body may not have heard. Stamps are whole
-        seconds, so the line's own message (created some milliseconds into
-        that second) would otherwise be read twice (seen live on 09-20).
-        None for an empty room."""
-        for line in reversed(conversation.get("conversation", [])):
+        """One second after the LATEST stamp in the room's history, UTC — the
+        first moment the body may not have heard. Latest, not last: faebot's
+        own lines are stamped with their summons' time and appended when the
+        reply lands, so a slow reply sits after newer lines with an older
+        stamp (seen on the first prod login, 09-20: two lived lines read
+        twice). One second after, because stamps are whole seconds and the
+        stamped message itself was created some milliseconds in. None for a
+        room with no stamped line."""
+        latest: Optional[datetime.datetime] = None
+        for line in conversation.get("conversation", []):
             match = self.LINE_STAMP.match(line)
-            if match:
-                return datetime.datetime.strptime(
-                    match.group(1), "%Y-%m-%d %H:%M:%S"
-                ).replace(tzinfo=datetime.timezone.utc) + datetime.timedelta(seconds=1)
-        return None
+            if not match:
+                continue
+            stamp = datetime.datetime.strptime(
+                match.group(1), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=datetime.timezone.utc)
+            if latest is None or stamp > latest:
+                latest = stamp
+        return None if latest is None else latest + datetime.timedelta(seconds=1)
 
     def _recovered_line(self, message) -> str:
         """A message read after the fact, in the live history's own dialect."""

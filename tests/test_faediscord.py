@@ -250,6 +250,20 @@ class TestFaebot:
         assert room["conversation"][1].startswith(
             "[2026-09-20 13:00:01] [lost connection — read back from each room's last line"
         )
+        # A slow reply lands after newer lines with its summons' stamp: the
+        # window still opens after the LATEST stamp, not the last line's.
+        room["conversation"] = [
+            "[2026-09-20 13:00:00] Dawn: tea",
+            "[2026-09-20 13:00:16] Brownie-dev: read later: 3 messages",
+            "[2026-09-20 13:00:28] ambassador faeries: done",
+            "[2026-09-20 13:00:15] faebot: *stays quiet*",
+        ]
+        seen_windows.clear()
+        with patch.object(capture, "record"), patch.object(
+            capture, "serialize_message", return_value={"id": 1}
+        ), patch("discord.utils.utcnow", return_value=recent + timedelta(hours=5)):
+            await faebot._catch_up()
+        assert seen_windows == [datetime(2026, 9, 20, 13, 0, 29, tzinfo=timezone.utc)]
         # The same room, weeks later: older than the cap — left alone.
         room["conversation"] = ["[2026-08-01 13:00:00] Dawn: tea"]
         with patch.object(capture, "record") as record:
