@@ -478,6 +478,9 @@ class Faebot(discord.Client):
             return
         self._ready_once = True
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        # A restart, a reboot, a deploy: no clock, but each room knows the
+        # last thing it heard — read back from there. Gaps get clocks.
+        await self._catch_up()
         # Loud capture status so a preflight glance at the logs settles it
         # (the silent-no-op lesson from the Twitch tap).
         if capture.is_enabled():
@@ -506,14 +509,17 @@ class Faebot(discord.Client):
     CATCH_UP_MAX_LOOKBACK = datetime.timedelta(days=3)
 
     def _last_heard_at(self, conversation) -> Optional[datetime.datetime]:
-        """The stamp on the room's last stamped line, UTC — the last thing
-        the body heard there. None for an empty room."""
+        """One second after the stamp on the room's last stamped line, UTC —
+        the first moment the body may not have heard. Stamps are whole
+        seconds, so the line's own message (created some milliseconds into
+        that second) would otherwise be read twice (seen live on 09-20).
+        None for an empty room."""
         for line in reversed(conversation.get("conversation", [])):
             match = self.LINE_STAMP.match(line)
             if match:
                 return datetime.datetime.strptime(
                     match.group(1), "%Y-%m-%d %H:%M:%S"
-                ).replace(tzinfo=datetime.timezone.utc)
+                ).replace(tzinfo=datetime.timezone.utc) + datetime.timedelta(seconds=1)
         return None
 
     def _recovered_line(self, message) -> str:

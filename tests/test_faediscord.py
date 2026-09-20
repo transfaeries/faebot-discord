@@ -115,10 +115,12 @@ class TestFaebot:
         faebot._catch_up = AsyncMock(return_value=0)
         await faebot.on_ready()
         faebot.fdb.load_conversations.assert_not_awaited()
-        faebot._catch_up.assert_not_awaited()
+        # The login too reads back from each room's last line (a restart has
+        # no clock, but the rooms remember): one catch-up, no `since`.
+        faebot._catch_up.assert_awaited_once_with()
         await faebot.on_ready()
         faebot.fdb.load_conversations.assert_not_awaited()
-        faebot._catch_up.assert_awaited_once()
+        assert faebot._catch_up.await_count == 2
 
     @pytest.mark.asyncio
     async def test_resume_clears_the_outage_clock(self, faebot):
@@ -239,9 +241,10 @@ class TestFaebot:
             capture, "serialize_message", return_value={"id": 1}
         ), patch("discord.utils.utcnow", return_value=recent + timedelta(hours=5)):
             assert await faebot._catch_up() == 1
-        assert seen_windows == [recent]
+        # One second after the last line: its own message is not read twice.
+        assert seen_windows == [recent + timedelta(seconds=1)]
         assert room["conversation"][1].startswith(
-            "[2026-09-20 13:00:00] [lost connection — read back from each room's last line"
+            "[2026-09-20 13:00:01] [lost connection — read back from each room's last line"
         )
         # The same room, weeks later: older than the cap — left alone.
         room["conversation"] = ["[2026-08-01 13:00:00] Dawn: tea"]
