@@ -1133,11 +1133,12 @@ class Faebot(discord.Client):
             return None
 
         reply = completion.text.strip()
-        if len(reply) > generation.MESSAGE_LIMIT:
-            logging.warning(
-                f"reply is {len(reply)} chars, over Discord's {generation.MESSAGE_LIMIT} — cutting it"
+        parts = generation.split_message(reply)
+        if len(parts) > 1:
+            logging.info(
+                f"reply is {len(reply)} chars, over Discord's {generation.MESSAGE_LIMIT}"
+                f" — sending it in {len(parts)} parts"
             )
-            reply = generation.fit_message(reply)
         logging.info(
             f"received response in {completion.elapsed:.1f}s "
             f"(finish_reason={completion.finish_reason!r}, attempts={completion.attempts}): {reply}"
@@ -1159,23 +1160,50 @@ class Faebot(discord.Client):
             f"\nthere are currently {len(self.conversations.items())} conversations in memory"
         )
 
-        try:
-            sent_message = await message.channel.send(reply)
-        except Exception as error:
-            logging.error(f"discord send failed: {type(error).__name__}: {error}")
-            capture.record_faebot_error(
-                message.channel,
-                f"discord send failed: {type(error).__name__}: {error}",
-                **meta,
-            )
-            return None
-
         # Capture faer own reply WITH internal metadata (prompt/model/context/
         # reasoning) — the send point is the only place this view exists; the
-        # gateway echo of the same message is captured separately in on_message.
-        capture.record_faebot_message(sent_message, **meta)
+        # gateway echo of each message is captured separately in on_message.
+        # A reply sent in parts is captured part by part, each with its place
+        # in the whole; the prompt, context and reasoning ride the first only.
+        sent: list[Any] = []
+        for number, part in enumerate(parts, start=1):
+            try:
+                sent_message = await message.channel.send(part)
+            except Exception as error:
+                landed = (
+                    f" ({len(sent)} of {len(parts)} parts had landed)"
+                    if len(parts) > 1
+                    else ""
+                )
+                logging.error(
+                    f"discord send failed: {type(error).__name__}: {error}{landed}"
+                )
+                capture.record_faebot_error(
+                    message.channel,
+                    f"discord send failed: {type(error).__name__}: {error}{landed}",
+                    **meta,
+                )
+                break
+            part_meta = meta if number == 1 else self._later_part_meta(meta)
+            if len(parts) > 1:
+                part_meta = dict(part_meta, part=number, parts=len(parts))
+            capture.record_faebot_message(sent_message, **part_meta)
+            sent.append(sent_message)
+        if not sent:
+            return None
         await self._save_conversation(conversation_id)
-        return sent_message
+        return sent[0]
+
+    @staticmethod
+    def _later_part_meta(meta: dict[str, Any]) -> dict[str, Any]:
+        """The send-point metadata for the second part of a reply onward:
+        the same provenance, without the prompt, context and reasoning the
+        first part already carries."""
+        return {
+            key: value
+            for key, value in meta.items()
+            if key not in ("prompt", "context", "reasoning")
+        }
 
     async def _save_conversation(self, conversation_id):
         if not await self.fdb.save_conversation(

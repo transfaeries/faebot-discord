@@ -150,11 +150,37 @@ class TestGenerate:
             await generation.generate(session, "p", "m")
         assert "provider" not in session.calls[0]
 
-    def test_fit_message(self):
-        assert generation.fit_message("short") == "short"
-        long = "x" * 2500
-        cut = generation.fit_message(long)
-        assert len(cut) == 2000 and cut.endswith("–")
+    def test_a_reply_that_fits_is_sent_whole(self):
+        assert generation.split_message("short") == ["short"]
+        assert generation.split_message("x" * 2000) == ["x" * 2000]
+
+    def test_a_long_reply_splits_at_a_paragraph_and_loses_nothing(self):
+        first = "one sentence. " * 100  # 1400 chars
+        second = "another thought. " * 60  # 1020 chars
+        parts = generation.split_message(first.strip() + "\n\n" + second.strip())
+        assert parts == [first.strip(), second.strip()]
+        assert all(len(part) <= generation.SPLIT_AT for part in parts)
+
+    def test_without_a_paragraph_it_splits_at_a_sentence_then_a_word(self):
+        text = "*leans in* " + "a small true thing. " * 120  # ~2400, one line
+        parts = generation.split_message(text)
+        assert len(parts) == 2
+        assert parts[0].endswith("thing.") and len(parts[0]) <= 1800
+        assert " ".join(parts).split() == text.split()
+        words = "word " * 500  # no sentence ends at all
+        parts = generation.split_message(words.strip())
+        assert parts[0].endswith("word") and len(parts[0]) <= 1800
+        assert " ".join(parts).split() == words.split()
+
+    def test_an_unbroken_run_is_cut_at_the_target(self):
+        parts = generation.split_message("x" * 4500)
+        assert [len(part) for part in parts] == [1800, 1800, 900]
+
+    def test_a_seam_too_early_is_passed_over(self):
+        """A paragraph break a few words in would make a stub message."""
+        text = "hi\n\n" + "a b c " * 400  # the only paragraph break is at 2
+        parts = generation.split_message(text)
+        assert len(parts[0]) > generation.SPLIT_AT // 2
 
     @pytest.mark.asyncio
     async def test_empty_answer_rolls_again(self):
