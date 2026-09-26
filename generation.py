@@ -281,21 +281,41 @@ def _request(
 SENTENCE_END = re.compile(r"[.!?…][\"')\]*_~]*\s")
 
 
+def message_length(text: str) -> int:
+    """Length as a JavaScript client counts it — UTF-16 code units, so an
+    emoji outside the basic plane counts two. Never less than Python's
+    code-point count, so a limit held in these units holds either way."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _fitting_prefix(text: str, budget: int) -> int:
+    """How many characters from the start of `text` fit in `budget` units."""
+    used = 0
+    for index, character in enumerate(text):
+        used += 2 if ord(character) > 0xFFFF else 1
+        if used > budget:
+            return index
+    return len(text)
+
+
 def split_message(
     text: str, limit: int = MESSAGE_LIMIT, target: int = SPLIT_AT
 ) -> list[str]:
     """A reply as the messages Discord will accept, in order. Whole if it
-    fits under `limit`; otherwise parts of at most `target` characters,
-    each broken at the last paragraph, line, sentence or word boundary in
-    its window — never so early that a part is under half the window — and
-    cut mid-word only when the window has no space at all."""
-    if len(text) <= limit:
+    fits under `limit`. Otherwise each part but the last ends near `target`,
+    at the last paragraph, line, sentence or word boundary in its window —
+    never so early that a part is under half the window — and mid-word only
+    when the window has no space at all; the last part is whatever remains,
+    up to `limit`. Lengths are counted as `message_length` counts them."""
+    target = min(target, limit)
+    if message_length(text) <= limit:
         return [text]
     parts: list[str] = []
     rest = text
-    while len(rest) > limit:
-        window = rest[:target]
-        floor = target // 2
+    while message_length(rest) > limit:
+        size = _fitting_prefix(rest, target)
+        window = rest[:size]
+        floor = size // 2
         cut = window.rfind("\n\n")
         if cut < floor:
             cut = window.rfind("\n")
@@ -305,7 +325,7 @@ def split_message(
         if cut < floor:
             cut = window.rfind(" ")
         if cut < floor:
-            cut = target
+            cut = size
         parts.append(rest[:cut].rstrip())
         rest = rest[cut:].lstrip()
     parts.append(rest)

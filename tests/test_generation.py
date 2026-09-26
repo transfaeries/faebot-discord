@@ -176,6 +176,22 @@ class TestGenerate:
         parts = generation.split_message("x" * 4500)
         assert [len(part) for part in parts] == [1800, 1800, 900]
 
+    def test_the_last_part_is_whatever_remains_up_to_the_limit(self):
+        assert [len(p) for p in generation.split_message("x" * 3800)] == [1800, 2000]
+
+    def test_emoji_count_as_a_client_counts_them(self):
+        """An emoji outside the basic plane is two UTF-16 units; the wall is
+        held in those units, so an emoji-heavy reply can't breach it."""
+        assert generation.message_length("😀") == 2
+        parts = generation.split_message("😀" * 2500)
+        assert all(generation.message_length(part) <= 1800 for part in parts)
+        assert "".join(parts) == "😀" * 2500
+        assert generation.split_message("😀" * 1000) == ["😀" * 1000]  # 2000 units
+
+    def test_a_target_past_the_limit_is_held_to_the_limit(self):
+        parts = generation.split_message("x" * 2500, target=3000)
+        assert [len(p) for p in parts] == [2000, 500]
+
     def test_a_seam_too_early_is_passed_over(self):
         """A paragraph break a few words in would make a stub message."""
         text = "hi\n\n" + "a b c " * 400  # the only paragraph break is at 2

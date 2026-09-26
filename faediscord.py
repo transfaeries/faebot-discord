@@ -1165,6 +1165,8 @@ class Faebot(discord.Client):
         # gateway echo of each message is captured separately in on_message.
         # A reply sent in parts is captured part by part, each with its place
         # in the whole; the prompt, context and reasoning ride the first only.
+        # The history above holds the reply whole — what faebot meant to say.
+        # If a part fails, the room heard less; the error says how much landed.
         sent: list[Any] = []
         for number, part in enumerate(parts, start=1):
             try:
