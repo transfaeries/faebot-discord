@@ -549,6 +549,94 @@ class TestFaebot:
         record.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_a_long_reply_is_sent_in_parts_and_captured_part_by_part(
+        self, faebot, mock_message
+    ):
+        """Over Discord's 2000, a reply goes as several messages, not cut;
+        each part is captured with its place, the prompt on the first only,
+        and the history keeps the reply whole."""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        reply = ("first paragraph. " * 90).strip() + "\n\n" + ("second. " * 90).strip()
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(
+                faebot,
+                "_generate_reply",
+                return_value=Completion(text=reply, reasoning="r"),
+            ):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_message") as record:
+                            await faebot._handle_conversation(
+                                mock_message, conversation_id
+                            )
+        sends = [call.args[0] for call in mock_message.channel.send.call_args_list]
+        assert len(sends) == 2 and all(len(part) <= 2000 for part in sends)
+        assert "\n\n".join(sends) == reply
+        first, second = (call.kwargs for call in record.call_args_list)
+        assert (first["part"], first["parts"]) == (1, 2)
+        assert (second["part"], second["parts"]) == (2, 2)
+        assert first["reasoning"] == "r" and "prompt" in first
+        assert "reasoning" not in second and "prompt" not in second
+        history = faebot.conversations[conversation_id]["conversation"]
+        assert history[-1].endswith(reply)
+
+    @pytest.mark.asyncio
+    async def test_a_part_that_fails_to_send_is_an_error_that_says_what_landed(
+        self, faebot, mock_message
+    ):
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        landed = Mock()
+        mock_message.channel.send = AsyncMock(
+            side_effect=[landed, RuntimeError("gone")]
+        )
+        reply = ("one. " * 300).strip() + "\n\n" + ("two. " * 300).strip()
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(
+                faebot, "_generate_reply", return_value=Completion(text=reply)
+            ):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_message") as record:
+                            with patch.object(capture, "record_faebot_error") as error:
+                                result = await faebot._handle_conversation(
+                                    mock_message, conversation_id
+                                )
+        assert result is landed
+        record.assert_called_once()
+        assert "1 of 2 parts had landed" in error.call_args.args[1]
+        faebot.fdb.save_conversation.assert_awaited()
+
+    @pytest.mark.asyncio
     async def test_handle_reply_message(self, faebot, mock_message):
         """Test handling of reply messages"""
         conversation_id = str(mock_message.channel.id)

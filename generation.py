@@ -28,9 +28,13 @@ import aiohttp
 GENERATION_CAP = int(os.getenv("GENERATION_CAP", "600"))
 REASONING_CAP = int(os.getenv("REASONING_CAP", "8000"))
 
-# Discord refuses messages over 2000 characters. A reply that long is the
-# prompt failing, not a feature; it is cut rather than lost.
+# Discord refuses messages over 2000 characters. A reply longer than that is
+# sent as several messages rather than cut: each part ends near SPLIT_AT at
+# the most natural seam the text offers — a paragraph, a line, a sentence, a
+# word — so no part meets the wall and no words are lost. A reply that fits
+# is sent whole.
 MESSAGE_LIMIT = 2000
+SPLIT_AT = int(os.getenv("SPLIT_AT", "1800"))
 
 # Provider pinning, for the prompt cache and for the reasoning channel: only
 # some OpenRouter providers cache the prompt (Modal and Moonshot did, on the
@@ -272,11 +276,60 @@ def _request(
     )
 
 
-def fit_message(text: str, limit: int = MESSAGE_LIMIT) -> str:
-    """Cut a reply to what Discord will accept, marking the cut."""
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "–"
+# Where a sentence ends: its closing punctuation, anything that closes
+# around it (a quote, a bracket, the end of an *action*), then a space.
+SENTENCE_END = re.compile(r"[.!?…][\"')\]*_~]*\s")
+
+
+def message_length(text: str) -> int:
+    """Length as a JavaScript client counts it — UTF-16 code units, so an
+    emoji outside the basic plane counts two. Never less than Python's
+    code-point count, so a limit held in these units holds either way."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _fitting_prefix(text: str, budget: int) -> int:
+    """How many characters from the start of `text` fit in `budget` units."""
+    used = 0
+    for index, character in enumerate(text):
+        used += 2 if ord(character) > 0xFFFF else 1
+        if used > budget:
+            return index
+    return len(text)
+
+
+def split_message(
+    text: str, limit: int = MESSAGE_LIMIT, target: int = SPLIT_AT
+) -> list[str]:
+    """A reply as the messages Discord will accept, in order. Whole if it
+    fits under `limit`. Otherwise each part but the last ends near `target`,
+    at the last paragraph, line, sentence or word boundary in its window —
+    never so early that a part is under half the window — and mid-word only
+    when the window has no space at all; the last part is whatever remains,
+    up to `limit`. Lengths are counted as `message_length` counts them."""
+    target = min(target, limit)
+    if message_length(text) <= limit:
+        return [text]
+    parts: list[str] = []
+    rest = text
+    while message_length(rest) > limit:
+        size = _fitting_prefix(rest, target)
+        window = rest[:size]
+        floor = size // 2
+        cut = window.rfind("\n\n")
+        if cut < floor:
+            cut = window.rfind("\n")
+        if cut < floor:
+            ends = [match.end() for match in SENTENCE_END.finditer(window)]
+            cut = ends[-1] if ends else -1
+        if cut < floor:
+            cut = window.rfind(" ")
+        if cut < floor:
+            cut = size
+        parts.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip()
+    parts.append(rest)
+    return parts
 
 
 def _parse(result: Any, model: str, elapsed: float) -> Completion:
