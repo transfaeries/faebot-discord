@@ -171,6 +171,7 @@ class TestFaebot:
         # Named-by-mention is the other half of `— unanswered`; keep it quiet
         # here so the name-in-content rule is what the test sees.
         faebot.user.mentioned_in = Mock(return_value=False)
+        faebot.user.display_name = "faebot"
         return faebot.conversations["555"]
 
     @pytest.mark.asyncio
@@ -207,8 +208,37 @@ class TestFaebot:
         first_message = record.call_args_list[0].args[1]
         assert first_message["ts"] == "2026-09-20T17:30:00+00:00"
         assert first_message["recovered"]["after"] == "2026-09-20T17:00:28+00:00"
+        # The diary's half sees the debt's face too: the row says it named faer.
+        assert first_message["recovered"]["named"] is True
+        assert record.call_args_list[1].args[1]["recovered"]["named"] is False
         lost = record.call_args_list[2].args[1]
         assert lost["ts"] == "2026-09-20T17:00:28+00:00"
+
+    @pytest.mark.asyncio
+    async def test_read_back_names_faebot_by_the_live_rule(self, faebot):
+        """`— unanswered` is judged exactly as the body would have judged it
+        live: the name among the first or last three words (or a mention).
+        Bare "fae" is fae's name and the house's pronoun, not a summons."""
+        room = self._room_and_channel(
+            faebot,
+            [
+                ("Dawn", "fae said hi to everyone"),
+                ("Dawn", "ok faebot"),
+                ("Dawn", "well i think faebot is great tonight friends"),
+            ],
+        )
+        with patch.object(capture, "record"), patch.object(
+            capture, "serialize_message", return_value={"id": 1}
+        ):
+            await faebot._catch_up(
+                since=datetime(2026, 9, 20, 17, 0, tzinfo=timezone.utc)
+            )
+        marks = [line.rsplit("  ", 1)[1] for line in room["conversation"][2:5]]
+        assert marks == [
+            "[read later]",
+            "[read later — unanswered]",
+            "[read later]",
+        ]
 
     @pytest.mark.asyncio
     async def test_catch_up_leaves_quiet_rooms_alone(self, faebot):

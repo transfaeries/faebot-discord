@@ -501,7 +501,6 @@ class Faebot(discord.Client):
     # and their own happened-at `ts`, which is what transduce already renders
     # for recover_history.py's output — the diary's half mends itself.
 
-    SUMMONS = re.compile(r"\bfae(bot)?\b", re.IGNORECASE)
     LINE_STAMP = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
     # Without a clock (a restart: the process has no memory of going down),
     # each room reads back from its own last line — capped, so a room quiet
@@ -529,15 +528,30 @@ class Faebot(discord.Client):
                 latest = stamp
         return None if latest is None else latest + datetime.timedelta(seconds=1)
 
-    def _recovered_line(self, message) -> str:
+    def _named_in(self, message) -> Optional[str]:
+        """Does this message name faebot — the one rule, shared by the live
+        reply decision and the read-back's `— unanswered` mark, so a hole is
+        judged exactly as the body would have judged it live: a mention, or
+        the display name among the first or last three words. (Bare "fae" is
+        a name and a pronoun in this house, not a summons.) Returns why, or
+        None."""
+        if self.user is None:
+            return None
+        if self.user.mentioned_in(message):
+            return "mentioned"
+        words = (message.content or "").strip().lower().split()
+        bot_name = self.user.display_name.lower()
+        edges = words[: min(3, len(words))] + words[-min(3, len(words)) :]
+        if any(bot_name in word for word in edges):
+            return "named at the beginning or end"
+        return None
+
+    def _recovered_line(self, message, named: bool) -> str:
         """A message read after the fact, in the live history's own dialect."""
         when = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
         author = message.author.display_name
         verb = " replied:" if message.reference else ":"
         content = self._render_message(message)
-        named = self.user.mentioned_in(message) or bool(
-            self.SUMMONS.search(message.content or "")
-        )
         mark = "[read later — unanswered]" if named else "[read later]"
         return f"[{when}] {author}{verb} {content}  {mark}"
 
@@ -591,6 +605,9 @@ class Faebot(discord.Client):
                     channel = await self.fetch_channel(int(conversation_id))
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     continue
+            history = getattr(channel, "history", None)
+            if history is None:
+                continue  # a category, a forum: nothing is said *in* it
             # Anything that arrived live between READY and here is already in
             # the history (the proxy buffer knows its ids) — do not read it twice.
             seen = {entry[0] for entry in self.recent_messages.get(conversation_id, [])}
@@ -599,7 +616,7 @@ class Faebot(discord.Client):
             mark = len(conversation["conversation"])
             lines: List[str] = []
             try:
-                async for message in channel.history(
+                async for message in history(
                     after=after, before=now, limit=None, oldest_first=True
                 ):
                     if (
@@ -608,15 +625,23 @@ class Faebot(discord.Client):
                         or message.content.startswith(COMMAND_PREFIX)
                     ):
                         continue
+                    named = self._named_in(message) is not None
+                    # The row's own window and whether it named faebot ride
+                    # with it: `after` is this room's, and `named` is what
+                    # lets the diary show the debt's face too.
                     capture.record(
                         "message",
                         {
                             "ts": message.created_at.isoformat(),
                             "message": capture.serialize_message(message),
-                            "recovered": marker,
+                            "recovered": {
+                                **marker,
+                                "after": after.isoformat(),
+                                "named": named,
+                            },
                         },
                     )
-                    lines.append(self._recovered_line(message))
+                    lines.append(self._recovered_line(message, named))
                     conversation["conversants"][
                         message.author.name
                     ] = message.author.display_name
@@ -1202,33 +1227,16 @@ class Faebot(discord.Client):
 
     async def _should_respond_to_message(self, message, conversation_id):
         """Determine if the bot should respond based on specified criteria"""
-        content = message.content.strip().lower()
-
         # Get reply frequency from conversation settings
         reply_frequency = self.conversations[conversation_id].get(
             "reply_frequency", 0.05
         )
 
-        # Check for mentions
-        if self.user.mentioned_in(message):
-            logging.info("Responding because bot was mentioned")
-            return True
-
-        # Check if bot's name is at beginning or end
-        bot_name = self.user.display_name.lower()
-        words = content.split()
-
-        # Check first three words (or less if message is shorter)
-        first_words = words[: min(3, len(words))]
-        # Check last three words (or less if message is shorter)
-        last_words = words[-min(3, len(words)) :]
-
-        if any(bot_name in word for word in first_words) or any(
-            bot_name in word for word in last_words
-        ):
-            logging.info(
-                "Responding because bot name is at beginning or end of message"
-            )
+        # Named — a mention, or the name at the beginning or end (one rule,
+        # shared with the read-back's `— unanswered` mark).
+        named = self._named_in(message)
+        if named:
+            logging.info(f"Responding because bot was {named}")
             return True
 
         # Random response based on frequency
