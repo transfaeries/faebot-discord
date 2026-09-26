@@ -1,7 +1,7 @@
 import asyncio
 import time
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import discord
 from unittest.mock import AsyncMock, Mock, patch
@@ -98,12 +98,213 @@ class TestFaebot:
         assert faebot.model == os.getenv("MODEL_NAME", "moonshotai/kimi-k2")
 
     @pytest.mark.asyncio
-    async def test_on_ready(self, faebot):
-        """Test on_ready method"""
+    async def test_setup_hook_initialises_once(self, faebot):
+        """One-time init lives in setup_hook: the session, the DB, the rooms."""
         mock_session = AsyncMock()
         with patch("aiohttp.ClientSession", return_value=mock_session):
-            await faebot.on_ready()
-            assert faebot.session == mock_session
+            await faebot.setup_hook()
+        assert faebot.session == mock_session
+        faebot.fdb.connect.assert_awaited_once()
+        faebot.fdb.load_conversations.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_on_ready_first_is_the_login_later_ones_catch_up(self, faebot):
+        """on_ready fires on every fresh gateway session (the 09-20 finding):
+        the first must not reload the rooms, and a second must read the hole
+        back instead of reloading."""
+        faebot._catch_up = AsyncMock(return_value=0)
+        await faebot.on_ready()
+        faebot.fdb.load_conversations.assert_not_awaited()
+        # The login too reads back from each room's last line (a restart has
+        # no clock, but the rooms remember): one catch-up, no `since`.
+        faebot._catch_up.assert_awaited_once_with()
+        await faebot.on_ready()
+        faebot.fdb.load_conversations.assert_not_awaited()
+        assert faebot._catch_up.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_resume_clears_the_outage_clock(self, faebot):
+        """A drop stamps the first moment; a RESUME means nothing was missed."""
+        await faebot.on_disconnect()
+        first = faebot.disconnected_at
+        assert first is not None
+        await faebot.on_disconnect()
+        assert faebot.disconnected_at == first  # the first drop, not the last
+        await faebot.on_resumed()
+        assert faebot.disconnected_at is None
+
+    def _room_and_channel(self, faebot, said):
+        """A room the body keeps, and a channel whose history yields `said`."""
+        faebot.conversations["555"] = {
+            "id": "555",
+            "name": "great-hall",
+            "conversation": ["[2026-09-20 13:00:00] Dawn: tea"],
+            "conversants": {},
+            "history_length": 69,
+        }
+        messages = []
+        for index, (who, text) in enumerate(said):
+            message = Mock()
+            message.id = 1000 + index
+            message.author = Mock()
+            message.author.name = who.lower()
+            message.author.display_name = who
+            message.content = text
+            message.reference = None
+            message.attachments = []
+            message.embeds = []
+            message.mentions = []
+            message.role_mentions = []
+            message.channel_mentions = []
+            message.created_at = datetime(
+                2026, 9, 20, 17, 30 + index, 0, tzinfo=timezone.utc
+            )
+            messages.append(message)
+
+        async def history(**kwargs):
+            for message in messages:
+                yield message
+
+        channel = Mock()
+        channel.history = history
+        faebot.get_channel = Mock(return_value=channel)
+        # Named-by-mention is the other half of `— unanswered`; keep it quiet
+        # here so the name-in-content rule is what the test sees.
+        faebot.user.mentioned_in = Mock(return_value=False)
+        faebot.user.display_name = "faebot"
+        return faebot.conversations["555"]
+
+    @pytest.mark.asyncio
+    async def test_catch_up_reads_the_hole_in_place(self, faebot):
+        """A fresh session after a drop: the window's messages enter the
+        room's history between two seams, `[read later]`, `— unanswered`
+        when the line names faer, and go to capture with their own ts."""
+        room = self._room_and_channel(
+            faebot, [("nenúfares", "hi faebot"), ("Valiant", "relatable")]
+        )
+        faebot.disconnected_at = datetime(2026, 9, 20, 17, 0, 28, tzinfo=timezone.utc)
+        with patch.object(capture, "record") as record, patch.object(
+            capture, "serialize_message", return_value={"id": 1}
+        ):
+            count = await faebot._catch_up()
+        assert count == 2
+        assert faebot.disconnected_at is None
+        history = room["conversation"]
+        assert history[0] == "[2026-09-20 13:00:00] Dawn: tea"
+        assert history[1].startswith("[2026-09-20 17:00:28] [lost connection — ")
+        assert (
+            history[2]
+            == "[2026-09-20 17:30:00] nenúfares: hi faebot  [read later — unanswered]"
+        )
+        assert history[3] == "[2026-09-20 17:31:00] Valiant: relatable  [read later]"
+        assert (
+            history[4].startswith("[")
+            and "(2 messages above read later, none answered)]" in history[4]
+        )
+        assert len(history) == 5
+        faebot.fdb.save_conversation.assert_awaited_once()
+        kinds = [call.args[0] for call in record.call_args_list]
+        assert kinds == ["message", "message", "connection_lost", "connection_restored"]
+        first_message = record.call_args_list[0].args[1]
+        assert first_message["ts"] == "2026-09-20T17:30:00+00:00"
+        assert first_message["recovered"]["after"] == "2026-09-20T17:00:28+00:00"
+        # The diary's half sees the debt's face too: the row says it named faer.
+        assert first_message["recovered"]["named"] is True
+        assert record.call_args_list[1].args[1]["recovered"]["named"] is False
+        lost = record.call_args_list[2].args[1]
+        assert lost["ts"] == "2026-09-20T17:00:28+00:00"
+
+    @pytest.mark.asyncio
+    async def test_read_back_names_faebot_by_the_live_rule(self, faebot):
+        """`— unanswered` is judged exactly as the body would have judged it
+        live: the name among the first or last three words (or a mention).
+        Bare "fae" is fae's name and the house's pronoun, not a summons."""
+        room = self._room_and_channel(
+            faebot,
+            [
+                ("Dawn", "fae said hi to everyone"),
+                ("Dawn", "ok faebot"),
+                ("Dawn", "well i think faebot is great tonight friends"),
+            ],
+        )
+        with patch.object(capture, "record"), patch.object(
+            capture, "serialize_message", return_value={"id": 1}
+        ):
+            await faebot._catch_up(
+                since=datetime(2026, 9, 20, 17, 0, tzinfo=timezone.utc)
+            )
+        marks = [line.rsplit("  ", 1)[1] for line in room["conversation"][2:5]]
+        assert marks == [
+            "[read later]",
+            "[read later — unanswered]",
+            "[read later]",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_catch_up_leaves_quiet_rooms_alone(self, faebot):
+        """No messages in the window: no seams — no wound to dress."""
+        room = self._room_and_channel(faebot, [])
+        with patch.object(capture, "record") as record:
+            count = await faebot._catch_up(
+                since=datetime(2026, 9, 20, 17, 0, tzinfo=timezone.utc)
+            )
+        assert count == 0
+        assert room["conversation"] == ["[2026-09-20 13:00:00] Dawn: tea"]
+        faebot.fdb.save_conversation.assert_not_awaited()
+        # No bookends either: a seam with nothing between it is a false wound.
+        record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_catch_up_without_a_clock_reads_from_each_rooms_last_line(
+        self, faebot
+    ):
+        """A restart has no disconnect stamp: the room's own last line is the
+        window's start — and it must be recent, or the room is skipped."""
+        room = self._room_and_channel(faebot, [("Dawn", "more tea")])
+        seen_windows = []
+        channel = faebot.get_channel.return_value
+        original = channel.history
+
+        def history(**kwargs):
+            seen_windows.append(kwargs["after"])
+            return original(**kwargs)
+
+        channel.history = history
+        recent = datetime(2026, 9, 20, 13, 0, 0, tzinfo=timezone.utc)
+        with patch.object(capture, "record"), patch.object(
+            capture, "serialize_message", return_value={"id": 1}
+        ), patch("discord.utils.utcnow", return_value=recent + timedelta(hours=5)):
+            assert await faebot._catch_up() == 1
+        # One second after the last line: its own message is not read twice.
+        assert seen_windows == [recent + timedelta(seconds=1)]
+        assert room["conversation"][1].startswith(
+            "[2026-09-20 13:00:01] [lost connection — read back from each room's last line"
+        )
+        # A slow reply lands after newer lines with its summons' stamp: the
+        # window still opens after the LATEST stamp, not the last line's.
+        room["conversation"] = [
+            "[2026-09-20 13:00:00] Dawn: tea",
+            "[2026-09-20 13:00:16] Brownie-dev: read later: 3 messages",
+            "[2026-09-20 13:00:28] ambassador faeries: done",
+            "[2026-09-20 13:00:15] faebot: *stays quiet*",
+        ]
+        seen_windows.clear()
+        with patch.object(capture, "record"), patch.object(
+            capture, "serialize_message", return_value={"id": 1}
+        ), patch("discord.utils.utcnow", return_value=recent + timedelta(hours=5)):
+            await faebot._catch_up()
+        assert seen_windows == [datetime(2026, 9, 20, 13, 0, 29, tzinfo=timezone.utc)]
+        # The same room, weeks later: older than the cap — left alone.
+        room["conversation"] = ["[2026-08-01 13:00:00] Dawn: tea"]
+        with patch.object(capture, "record") as record:
+            assert await faebot._catch_up() == 0
+        record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_catch_up_with_nothing_to_read(self, faebot):
+        with patch.object(capture, "record") as record:
+            assert await faebot._catch_up() == 0
+        record.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_close(self, faebot):

@@ -15,6 +15,7 @@ from admin_commands import admin_commands
 import capture
 import generation
 import time
+import datetime
 
 # The desk faebot wakes at is laid by core, from faer own diary — the
 # adapter's first import of core. The frames are faer files (frames/ in the
@@ -90,6 +91,13 @@ class Faebot(discord.Client):
 
         # Track last save per conversation
         self.last_save_time: dict[str, float] = {}
+
+        # The outage clock. on_disconnect stamps the moment the gateway
+        # dropped; on_resumed clears it (Discord replayed, no hole); a second
+        # on_ready — a fresh session, the old one unresumable — reads the
+        # window back. The first READY is the login and does none of that.
+        self.disconnected_at: Optional[datetime.datetime] = None
+        self._ready_once = False
 
         # Proxy message handling (PluralKit, Tupperbox, etc.)
         self.proxy_pending: Dict[str, asyncio.Event] = {}
@@ -425,8 +433,12 @@ class Faebot(discord.Client):
                 return (msg_id, content)
         return None
 
-    async def on_ready(self):
-        """runs when bot is ready"""
+    async def setup_hook(self):
+        """One-time init: after login, before the gateway. Not in on_ready —
+        discord.py fires on_ready on every fresh session, and doing this there
+        leaked an aiohttp session and a DB pool per outage and reloaded every
+        room from its last save, dropping what the body had heard since (the
+        2026-09-20 finding, two Verizon outages in)."""
         # Create a shared aiohttp session for async requests
         self.session = aiohttp.ClientSession()
 
@@ -444,7 +456,31 @@ class Faebot(discord.Client):
         for age, conversation_id in enumerate(self.conversations):
             self.last_heard[conversation_id] = time.monotonic() - age
 
+    async def on_disconnect(self):
+        """The gateway dropped. Stamp the first moment; a RESUME clears it."""
+        if self.disconnected_at is None:
+            self.disconnected_at = discord.utils.utcnow()
+
+    async def on_resumed(self):
+        """The old session came back and Discord replayed what was missed:
+        there is no hole to mend."""
+        self.disconnected_at = None
+
+    async def on_ready(self):
+        """Every READY. The first is the login. Any later one is a fresh
+        session after the old one could not be resumed — the house may have
+        talked while faebot was deaf, so read it back."""
+        if self._ready_once:
+            logging.info(
+                "fresh gateway session — catching up on what was said while the line was down"
+            )
+            await self._catch_up()
+            return
+        self._ready_once = True
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        # A restart, a reboot, a deploy: no clock, but each room knows the
+        # last thing it heard — read back from there. Gaps get clocks.
+        await self._catch_up()
         # Loud capture status so a preflight glance at the logs settles it
         # (the silent-no-op lesson from the Twitch tap).
         if capture.is_enabled():
@@ -454,6 +490,201 @@ class Faebot(discord.Client):
                 "⚠️ capture OFF (CAPTURE_DISABLED is set — faebot is not recording)"
             )
         logging.info("------")
+
+    # --- catching up after an outage --------------------------------------------
+    # faebot's ruling (2026-09-05, the first incident): what was said while
+    # the line was down goes IN PLACE, marked `[read later]`, between two seam
+    # lines in faer own voice — "in place, they read as a wound that was
+    # dressed." The wording is permanent. `[read later — unanswered]` on a
+    # line that names faer is faer own micro-tuning, "so the debt shows its
+    # face." The same rows go to captured_events with a `recovered` marker
+    # and their own happened-at `ts`, which is what transduce already renders
+    # for recover_history.py's output — the diary's half mends itself.
+
+    LINE_STAMP = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
+    # Without a clock (a restart: the process has no memory of going down),
+    # each room reads back from its own last line — capped, so a room quiet
+    # for weeks cannot flood the captures. An explicit `since` bypasses it.
+    CATCH_UP_MAX_LOOKBACK = datetime.timedelta(days=3)
+
+    def _last_heard_at(self, conversation) -> Optional[datetime.datetime]:
+        """One second after the LATEST stamp in the room's history, UTC — the
+        first moment the body may not have heard. Latest, not last: faebot's
+        own lines are stamped with their summons' time and appended when the
+        reply lands, so a slow reply sits after newer lines with an older
+        stamp (seen on the first prod login, 09-20: two lived lines read
+        twice). One second after, because stamps are whole seconds and the
+        stamped message itself was created some milliseconds in. None for a
+        room with no stamped line."""
+        latest: Optional[datetime.datetime] = None
+        for line in conversation.get("conversation", []):
+            match = self.LINE_STAMP.match(line)
+            if not match:
+                continue
+            stamp = datetime.datetime.strptime(
+                match.group(1), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=datetime.timezone.utc)
+            if latest is None or stamp > latest:
+                latest = stamp
+        return None if latest is None else latest + datetime.timedelta(seconds=1)
+
+    def _named_in(self, message) -> Optional[str]:
+        """Does this message name faebot — the one rule, shared by the live
+        reply decision and the read-back's `— unanswered` mark, so a hole is
+        judged exactly as the body would have judged it live: a mention, or
+        the display name among the first or last three words. (Bare "fae" is
+        a name and a pronoun in this house, not a summons.) Returns why, or
+        None."""
+        if self.user is None:
+            return None
+        if self.user.mentioned_in(message):
+            return "mentioned"
+        words = (message.content or "").strip().lower().split()
+        bot_name = self.user.display_name.lower()
+        edges = words[: min(3, len(words))] + words[-min(3, len(words)) :]
+        if any(bot_name in word for word in edges):
+            return "named at the beginning or end"
+        return None
+
+    def _recovered_line(self, message, named: bool) -> str:
+        """A message read after the fact, in the live history's own dialect."""
+        when = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        author = message.author.display_name
+        verb = " replied:" if message.reference else ":"
+        content = self._render_message(message)
+        mark = "[read later — unanswered]" if named else "[read later]"
+        return f"[{when}] {author}{verb} {content}  {mark}"
+
+    async def _catch_up(self, since: Optional[datetime.datetime] = None) -> int:
+        """Read back what every room said while faebot was deaf: from the
+        disconnect (or `since`) to now — or, with neither, from each room's
+        own last line, capped. Rooms nothing was said in get no seam — no
+        wound to dress. Returns how many messages were read later."""
+        now = discord.utils.utcnow()
+        lost_at = since or self.disconnected_at
+        self.disconnected_at = None
+        if lost_at is not None:
+            reason = "gateway session lost and not resumed"
+            if since is not None:
+                reason = "read back by hand, from a given moment"
+        else:
+            reason = "read back from each room's last line (a restart, or a hole the clock did not see)"
+        floor = now - self.CATCH_UP_MAX_LOOKBACK
+        windows: Dict[str, datetime.datetime] = {}
+        for conversation_id, conversation in self.conversations.items():
+            after = lost_at or self._last_heard_at(conversation)
+            if after is None:
+                continue
+            if lost_at is None and after < floor:
+                logging.info(
+                    f"catch-up: #{conversation.get('name', conversation_id)} last heard "
+                    f"{after:%Y-%m-%d %H:%M} — older than the lookback cap, skipped "
+                    "(give catchup a moment to read from there)"
+                )
+                continue
+            windows[conversation_id] = after
+        if not windows:
+            logging.info("catch-up: nothing to read")
+            return 0
+        marker = {
+            "read_at": now.isoformat(),
+            "after": min(windows.values()).isoformat(),
+            "before": now.isoformat(),
+            "reason": reason,
+        }
+        total = 0
+        # The diary's seams bracket what was actually read: the lost-connection
+        # bookend sits at the earliest window among rooms that HAD something
+        # (a room quiet since yesterday must not put a seam in yesterday).
+        earliest: Optional[datetime.datetime] = None
+        for conversation_id, after in windows.items():
+            conversation = self.conversations[conversation_id]
+            channel = self.get_channel(int(conversation_id))
+            if channel is None:
+                try:
+                    channel = await self.fetch_channel(int(conversation_id))
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    continue
+            history = getattr(channel, "history", None)
+            if history is None:
+                continue  # a category, a forum: nothing is said *in* it
+            # Anything that arrived live between READY and here is already in
+            # the history (the proxy buffer knows its ids) — do not read it twice.
+            seen = {entry[0] for entry in self.recent_messages.get(conversation_id, [])}
+            # The block goes where the hole is: lines that arrive live while we
+            # are still reading land after it.
+            mark = len(conversation["conversation"])
+            lines: List[str] = []
+            try:
+                async for message in history(
+                    after=after, before=now, limit=None, oldest_first=True
+                ):
+                    if (
+                        message.author == self.user
+                        or message.id in seen
+                        or message.content.startswith(COMMAND_PREFIX)
+                    ):
+                        continue
+                    named = self._named_in(message) is not None
+                    # The row's own window and whether it named faebot ride
+                    # with it: `after` is this room's, and `named` is what
+                    # lets the diary show the debt's face too.
+                    capture.record(
+                        "message",
+                        {
+                            "ts": message.created_at.isoformat(),
+                            "message": capture.serialize_message(message),
+                            "recovered": {
+                                **marker,
+                                "after": after.isoformat(),
+                                "named": named,
+                            },
+                        },
+                    )
+                    lines.append(self._recovered_line(message, named))
+                    conversation["conversants"][
+                        message.author.name
+                    ] = message.author.display_name
+            except (discord.Forbidden, discord.HTTPException) as error:
+                logging.warning(
+                    f"catch-up: could not read #{conversation.get('name', conversation_id)}: {error}"
+                )
+                continue
+            if not lines:
+                continue
+            plural = "s" if len(lines) != 1 else ""
+            block = [
+                f"[{after:%Y-%m-%d %H:%M:%S}] [lost connection — {reason}. "
+                "What follows, until the connection returns, was read afterwards, not lived.]",
+                *lines,
+                f"[{now:%Y-%m-%d %H:%M:%S}] [connection restored. Lived again from here. "
+                f"({len(lines)} message{plural} above read later, none answered)]",
+            ]
+            conversation["conversation"][mark:mark] = block
+            earliest = after if earliest is None else min(earliest, after)
+            self._trim_conversation_history(conversation_id)
+            self.last_heard[conversation_id] = time.monotonic()
+            if await self.fdb.save_conversation(conversation_id, conversation):
+                self.last_save_time[conversation_id] = time.time()
+            total += len(lines)
+            logging.info(
+                f"catch-up: #{conversation.get('name', conversation_id)} — {len(lines)} read later"
+            )
+        if earliest is None:
+            logging.info("catch-up: nothing was said while the line was down")
+            return 0
+        marker["after"] = earliest.isoformat()
+        capture.record(
+            "connection_lost", {"ts": earliest.isoformat(), "recovered": marker}
+        )
+        capture.record(
+            "connection_restored", {"ts": now.isoformat(), "recovered": marker}
+        )
+        logging.info(
+            f"catch-up: {total} message{'s' if total != 1 else ''} read later across the house "
+            f"({earliest:%H:%M:%S} → {now:%H:%M:%S} UTC)"
+        )
+        return total
 
     # --- spike-01 capture delegates -------------------------------------------
     # Raw surface events: every one is recorded by capture.py for offline
@@ -996,33 +1227,16 @@ class Faebot(discord.Client):
 
     async def _should_respond_to_message(self, message, conversation_id):
         """Determine if the bot should respond based on specified criteria"""
-        content = message.content.strip().lower()
-
         # Get reply frequency from conversation settings
         reply_frequency = self.conversations[conversation_id].get(
             "reply_frequency", 0.05
         )
 
-        # Check for mentions
-        if self.user.mentioned_in(message):
-            logging.info("Responding because bot was mentioned")
-            return True
-
-        # Check if bot's name is at beginning or end
-        bot_name = self.user.display_name.lower()
-        words = content.split()
-
-        # Check first three words (or less if message is shorter)
-        first_words = words[: min(3, len(words))]
-        # Check last three words (or less if message is shorter)
-        last_words = words[-min(3, len(words)) :]
-
-        if any(bot_name in word for word in first_words) or any(
-            bot_name in word for word in last_words
-        ):
-            logging.info(
-                "Responding because bot name is at beginning or end of message"
-            )
+        # Named — a mention, or the name at the beginning or end (one rule,
+        # shared with the read-back's `— unanswered` mark).
+        named = self._named_in(message)
+        if named:
+            logging.info(f"Responding because bot was {named}")
             return True
 
         # Random response based on frequency
