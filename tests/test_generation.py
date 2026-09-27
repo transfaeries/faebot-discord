@@ -150,6 +150,38 @@ class TestGenerate:
             await generation.generate(session, "p", "m")
         assert "provider" not in session.calls[0]
 
+    def test_a_seam_inside_an_action_closes_and_reopens_it(self):
+        """A long *action* split across two messages renders whole in each."""
+        action = "*" + "she turns the page slowly. " * 90 + "and smiles.*"
+        parts = generation.split_message(action)
+        assert len(parts) == 2
+        assert parts[0].startswith("*") and parts[0].endswith("*")
+        assert parts[1].startswith("*") and parts[1].endswith("*")
+        for part in parts:
+            assert generation.open_spans(part) == []
+            assert generation.message_length(part) <= generation.MESSAGE_LIMIT
+
+    def test_a_seam_inside_a_code_block_closes_and_reopens_the_fence(self):
+        code = "```\n" + "print('hello')\n" * 160 + "```"
+        first, second = generation.split_message(code)
+        assert first.endswith("\n```") and second.startswith("```\n")
+        assert (
+            generation.open_spans(first) == [] and generation.open_spans(second) == []
+        )
+
+    def test_open_spans_names_what_is_left_open(self):
+        assert generation.open_spans("*waves* hello") == []
+        assert generation.open_spans("*waves and") == ["*"]
+        assert generation.open_spans("**bold *and italic") == ["**", "*"]
+        assert generation.open_spans("||a secret") == ["||"]
+        assert generation.open_spans("```\ncode *here") == ["```"]
+        assert generation.open_spans("snake_case_names stay alone") == []
+
+    def test_nested_spans_close_innermost_first(self):
+        part, rest = generation.mend_seam("**bold *and italic", "still going* done**")
+        assert part == "**bold *and italic***"
+        assert rest.startswith("***still going")
+
     def test_a_reply_that_fits_is_sent_whole(self):
         assert generation.split_message("short") == ["short"]
         assert generation.split_message("x" * 2000) == ["x" * 2000]

@@ -298,6 +298,40 @@ def _fitting_prefix(text: str, budget: int) -> int:
     return len(text)
 
 
+# Markdown that spans text and would tear across a seam: Discord renders
+# each message on its own, so a split inside an open *action* leaves the
+# first message italic to its end and a stray `*` at the start of the next.
+# Underscores are left alone — they live inside words and links too often
+# to be counted as openers.
+SPAN_MARKERS = ("||", "~~", "**", "*")
+CODE_FENCE = "```"
+
+
+def open_spans(text: str) -> list[str]:
+    """The markers left open at the end of `text`, outermost first. Inside an
+    open code fence nothing else counts — the fence is the only thing open."""
+    if text.count(CODE_FENCE) % 2:
+        return [CODE_FENCE]
+    rest = text
+    opened: list[tuple[int, str]] = []
+    for marker in SPAN_MARKERS:
+        if rest.count(marker) % 2:
+            opened.append((rest.rfind(marker), marker))
+        rest = rest.replace(marker, " " * len(marker))
+    return [marker for _, marker in sorted(opened)]
+
+
+def mend_seam(part: str, rest: str) -> tuple[str, str]:
+    """Close what the seam left open at the end of `part`, and open it again
+    at the start of `rest`, so each message renders whole."""
+    spans = open_spans(part)
+    if not spans:
+        return part, rest
+    if spans == [CODE_FENCE]:
+        return part + "\n" + CODE_FENCE, CODE_FENCE + "\n" + rest
+    return part + "".join(reversed(spans)), "".join(spans) + rest
+
+
 def split_message(
     text: str, limit: int = MESSAGE_LIMIT, target: int = SPLIT_AT
 ) -> list[str]:
@@ -326,8 +360,8 @@ def split_message(
             cut = window.rfind(" ")
         if cut < floor:
             cut = size
-        parts.append(rest[:cut].rstrip())
-        rest = rest[cut:].lstrip()
+        part, rest = mend_seam(rest[:cut].rstrip(), rest[cut:].lstrip())
+        parts.append(part)
     parts.append(rest)
     return parts
 
