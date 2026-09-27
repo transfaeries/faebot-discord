@@ -310,7 +310,12 @@ LONE_STARS = re.compile(r"(?m)^[ \t]*\*(?= )|(?<= )\*(?= )")
 
 def open_spans(text: str) -> list[str]:
     """The markers left open at the end of `text`, outermost first. Inside an
-    open code fence nothing else counts — the fence is the only thing open."""
+    open code fence nothing else counts — the fence is the only thing open.
+
+    Counted by parity, so it can't see a span nested in one of its own kind:
+    `*an action with *an inner italic` reads as nothing open, and a seam
+    there tears as it did before. Escaped stars and stars inside inline code
+    count too."""
     if text.count(CODE_FENCE) % 2:
         return [CODE_FENCE]
     # A `*` that opens nothing: a list bullet at the start of a line, or one
