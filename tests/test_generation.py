@@ -176,6 +176,10 @@ class TestGenerate:
         assert generation.open_spans("||a secret") == ["||"]
         assert generation.open_spans("```\ncode *here") == ["```"]
         assert generation.open_spans("snake_case_names stay alone") == []
+        # a bullet or a lone star opens nothing
+        assert generation.open_spans("a list:\n* one\n* two\n  * nested") == []
+        assert generation.open_spans("two * three is six") == []
+        assert generation.open_spans("* one\n*waves and") == ["*"]
 
     def test_nested_spans_close_innermost_first(self):
         part, rest = generation.mend_seam("**bold *and italic", "still going* done**")

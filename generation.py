@@ -305,6 +305,7 @@ def _fitting_prefix(text: str, budget: int) -> int:
 # to be counted as openers.
 SPAN_MARKERS = ("||", "~~", "**", "*")
 CODE_FENCE = "```"
+LONE_STARS = re.compile(r"(?m)^[ \t]*\*(?= )|(?<= )\*(?= )")
 
 
 def open_spans(text: str) -> list[str]:
@@ -312,7 +313,9 @@ def open_spans(text: str) -> list[str]:
     open code fence nothing else counts — the fence is the only thing open."""
     if text.count(CODE_FENCE) % 2:
         return [CODE_FENCE]
-    rest = text
+    # A `*` that opens nothing: a list bullet at the start of a line, or one
+    # standing alone between spaces (a sum, a shrug).
+    rest = LONE_STARS.sub(lambda match: " " * len(match.group(0)), text)
     opened: list[tuple[int, str]] = []
     for marker in SPAN_MARKERS:
         if rest.count(marker) % 2:
