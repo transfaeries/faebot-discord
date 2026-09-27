@@ -509,11 +509,51 @@ class TestFaebot:
         history = faebot.conversations[conversation_id]["conversation"]
         assert len(history) == 1
         assert history[0].startswith("[2024-01-01 12:00:00] ")
-        assert history[0].endswith(": *stays quiet*")
+        # the machinery's witness-mark, outside her speaker slot
+        assert history[0].endswith("] (faebot was here and chose quiet)")
+        assert "*stays quiet*" not in history[0]
         record_pass.assert_called_once()
         assert record_pass.call_args.args[1] == "they're mid-thought"
         assert record_pass.call_args.kwargs["reasoning"] == "r"
         faebot.fdb.save_conversation.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_an_echoed_old_marker_is_caught_as_her_pass(
+        self, faebot, mock_message
+    ):
+        """The bare `*stays quiet*` she learned from her history posts nothing:
+        it is recorded as the pass she meant, with the catch noted below it."""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(
+                faebot, "_generate_reply", return_value=Completion(text="*stays quiet*")
+            ):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_pass") as record_pass:
+                            await faebot._handle_conversation(
+                                mock_message, conversation_id
+                            )
+        mock_message.channel.send.assert_not_called()
+        history = faebot.conversations[conversation_id]["conversation"]
+        assert history[-1].endswith("] (faebot was here and chose quiet)")
+        assert record_pass.call_args.kwargs["caught_echo"] is True
+        assert record_pass.call_args.args[1] == ""
 
     @pytest.mark.asyncio
     async def test_handle_conversation_empty_says_nothing(self, faebot, mock_message):

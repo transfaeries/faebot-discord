@@ -1109,17 +1109,26 @@ class Faebot(discord.Client):
 
         if completion.passed:
             # faebot chose silence. The reason (if given) is kept for the
-            # capture; the history records only the fact, so fae remembers
-            # having chosen it without the reason being echoable.
+            # capture; the history records only the fact, as the machinery's
+            # witness-mark, outside her speaker slot — so she remembers having
+            # chosen quiet without a line in her own voice to copy. A pass
+            # that arrived as the old marker echoed back is still her pass;
+            # the capture says it was caught, below what she reads.
             logging.info(
                 f"faebot passed in {completion.elapsed:.1f}s"
                 f" — {completion.reason_for_passing or '(no reason given)'}"
+                + (
+                    " (the old marker, echoed — taken as the pass)"
+                    if completion.echoed
+                    else ""
+                )
             )
             conversation["conversation"].append(
-                f"[{current_time}] {self.user.display_name}: *stays quiet*"
+                f"[{current_time}] {generation.WITNESS_MARK}"
             )
+            pass_meta = dict(meta, caught_echo=True) if completion.echoed else meta
             capture.record_faebot_pass(
-                message.channel, completion.reason_for_passing, **meta
+                message.channel, completion.reason_for_passing, **pass_meta
             )
             await self._save_conversation(conversation_id)
             return None

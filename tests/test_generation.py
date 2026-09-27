@@ -150,6 +150,31 @@ class TestGenerate:
             await generation.generate(session, "p", "m")
         assert "provider" not in session.calls[0]
 
+    def test_the_old_marker_echoed_bare_is_the_pass_she_meant(self):
+        """Her history once showed her silences as `*stays quiet*` in her own
+        voice, and she began answering with it. The bare echo is a pass."""
+        for echo in (
+            "*stays quiet*",
+            "  *stays quiet*  ",
+            "_stays quiet_",
+            "stays quiet.",
+        ):
+            completion = generation.Completion(text=echo)
+            assert completion.passed and completion.echoed, echo
+            assert completion.reason_for_passing == ""
+        sentinel = generation.Completion(text="NOTHING-TO-SAY they're mid-thought")
+        assert sentinel.passed and not sentinel.echoed
+        assert sentinel.reason_for_passing == "they're mid-thought"
+
+    def test_anything_more_than_the_bare_echo_is_speech(self):
+        """Speaking *about* silence is a different sentence, and it posts."""
+        for speech in (
+            "*stays quiet* for now, but that was lovely",
+            "she stays quiet sometimes",
+            "*wings fold* *stays quiet*",
+        ):
+            assert not generation.Completion(text=speech).passed, speech
+
     def test_a_reply_that_fits_is_sent_whole(self):
         assert generation.split_message("short") == ["short"]
         assert generation.split_message("x" * 2000) == ["x" * 2000]

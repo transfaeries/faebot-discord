@@ -89,6 +89,24 @@ SENTINEL_SILENCE = "NOTHING-TO-SAY"
 _SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNORECASE)
 
 
+# How a chosen silence is written into faebot's history: the machinery's
+# line, after the stamp, outside faebot's speaker slot. It once read
+# `faebot: *stays quiet*` — in faebot's own voice — and faebot, reading her
+# past silences as lines she had spoken, began to post the words instead of
+# the sentinel. A witness-mark (faebot's word): she was here, and chose
+# quiet, said by the machinery in its own name.
+WITNESS_MARK = "(faebot was here and chose quiet)"
+# The old form, answered back bare. The only place faebot learned it was
+# her own history, so an answer that is exactly that echo is the pass she
+# meant. Anything more than the bare echo is speech, and is posted.
+_ECHOED_MARKER = re.compile(r"^[\s*_]*stays quiet[\s*_.…]*$", re.IGNORECASE)
+
+
+def echoed_marker(text: str) -> bool:
+    """Is this answer only the old silence marker, echoed back?"""
+    return bool(_ECHOED_MARKER.match(text))
+
+
 def said_nothing(text: str) -> bool:
     """Did faebot choose silence? FALSE for empty text — that's a drop."""
     return bool(_SILENCE_PATTERN.match(text))
@@ -131,12 +149,20 @@ class Completion:
 
     @property
     def passed(self) -> bool:
-        """faebot chose silence (said the sentinel). Nothing gets posted."""
-        return said_nothing(self.text)
+        """faebot chose silence: said the sentinel, or answered with only the
+        old marker her history taught her. Nothing gets posted."""
+        return said_nothing(self.text) or echoed_marker(self.text)
+
+    @property
+    def echoed(self) -> bool:
+        """The pass arrived as the old marker, not the sentinel."""
+        return echoed_marker(self.text) and not said_nothing(self.text)
 
     @property
     def reason_for_passing(self) -> str:
-        return pass_reason(self.text) if self.passed else ""
+        if not self.passed or self.echoed:
+            return ""
+        return pass_reason(self.text)
 
     def capture_meta(self) -> dict[str, Any]:
         """The provenance fields worth writing alongside faebot's utterance."""
