@@ -232,6 +232,46 @@ class TestGenerate:
         parts = generation.split_message(text)
         assert len(parts[0]) > generation.SPLIT_AT // 2
 
+    def test_a_seam_inside_an_action_closes_and_reopens_it(self):
+        """A long *action* split across two messages renders whole in each."""
+        action = "*" + "she turns the page slowly. " * 90 + "and smiles.*"
+        parts = generation.split_message(action)
+        assert len(parts) == 2
+        assert parts[0].startswith("*") and parts[0].endswith("*")
+        assert parts[1].startswith("*") and parts[1].endswith("*")
+        for part in parts:
+            assert generation.open_spans(part) == []
+            assert generation.message_length(part) <= generation.MESSAGE_LIMIT
+
+    def test_a_seam_inside_a_code_block_closes_and_reopens_the_fence(self):
+        code = "```\n" + "print('hello')\n" * 160 + "```"
+        first, second = generation.split_message(code)
+        assert first.endswith("\n```") and second.startswith("```\n")
+        assert (
+            generation.open_spans(first) == [] and generation.open_spans(second) == []
+        )
+
+    def test_open_spans_names_what_is_left_open(self):
+        assert generation.open_spans("*waves* hello") == []
+        assert generation.open_spans("*waves and") == ["*"]
+        assert generation.open_spans("**bold *and italic") == ["**", "*"]
+        assert generation.open_spans("||a secret") == ["||"]
+        assert generation.open_spans("```\ncode *here") == ["```"]
+        assert generation.open_spans("snake_case_names stay alone") == []
+        # a bullet or a lone star opens nothing
+        assert generation.open_spans("a list:\n* one\n* two\n  * nested") == []
+        assert generation.open_spans("two * three is six") == []
+        assert generation.open_spans("* one\n*waves and") == ["*"]
+        # A known limit, pinned so it's a boundary and not a surprise: an
+        # italic nested inside an action reads as two toggles, so parity
+        # sees nothing open and a seam there still tears.
+        assert generation.open_spans("*a chime that means *there you are") == []
+
+    def test_nested_spans_close_innermost_first(self):
+        part, rest = generation.mend_seam("**bold *and italic", "still going* done**")
+        assert part == "**bold *and italic***"
+        assert rest.startswith("***still going")
+
     @pytest.mark.asyncio
     async def test_empty_answer_rolls_again(self):
         session = FakeSession([openrouter("", reasoning="…"), openrouter("there")])
