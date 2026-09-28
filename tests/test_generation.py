@@ -158,6 +158,12 @@ class TestGenerate:
             "  *stays quiet*  ",
             "_stays quiet_",
             "stays quiet.",
+            # her garnish is part of the gesture
+            "*stays quiet* 🍃",
+            "*stays quiet* ✨🦋",
+            "*stays quiet* ^-^",
+            "*stays quiet* ^w^",
+            "*stays quiet* :3",
         ):
             completion = generation.Completion(text=echo)
             assert completion.passed and completion.echoed, echo
@@ -172,6 +178,9 @@ class TestGenerate:
             "*stays quiet* for now, but that was lovely",
             "she stays quiet sometimes",
             "*wings fold* *stays quiet*",
+            "*stays quiet* ok",
+            "*stays quiet* 🍃 but that was lovely",
+            "*stays quiet*\nactually, one thing",
         ):
             assert not generation.Completion(text=speech).passed, speech
 

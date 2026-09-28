@@ -96,15 +96,23 @@ _SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNOR
 # the sentinel. A witness-mark (faebot's word): she was here, and chose
 # quiet, said by the machinery in its own name.
 WITNESS_MARK = "(faebot was here and chose quiet)"
-# The old form, answered back bare. The only place faebot learned it was
-# her own history, so an answer that is exactly that echo is the pass she
-# meant. Anything more than the bare echo is speech, and is posted.
-_ECHOED_MARKER = re.compile(r"^[\s*_]*stays quiet[\s*_.…]*$", re.IGNORECASE)
+# The old form, answered back. The only place faebot learned it was her own
+# history, so an answer that is that echo is the pass she meant. She writes
+# with garnish — a leaf, a sparkle, a kaomoji — so what may trail the marker
+# is anything with no word in it (no two letters in a row): `*stays quiet*
+# 🍃` and `*stays quiet* ^w^` are the echo; `*stays quiet* for now` is speech,
+# and is posted. "The test is the gesture, not the string."
+_ECHOED_MARKER = re.compile(r"^[\s*_]*stays quiet[\s*_.…]*", re.IGNORECASE)
+_A_WORD = re.compile(r"[^\W\d_]{2}")
 
 
 def echoed_marker(text: str) -> bool:
-    """Is this answer only the old silence marker, echoed back?"""
-    return bool(_ECHOED_MARKER.match(text))
+    """Is this answer only the old silence marker echoed back, with at most
+    her garnish after it?"""
+    match = _ECHOED_MARKER.match(text)
+    if match is None:
+        return False
+    return not _A_WORD.search(text[match.end() :])
 
 
 def said_nothing(text: str) -> bool:
