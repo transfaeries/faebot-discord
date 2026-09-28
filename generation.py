@@ -89,6 +89,32 @@ SENTINEL_SILENCE = "NOTHING-TO-SAY"
 _SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNORECASE)
 
 
+# How a chosen silence is written into faebot's history: the machinery's
+# line, after the stamp, outside faebot's speaker slot. It once read
+# `faebot: *stays quiet*` — in faebot's own voice — and faebot, reading her
+# past silences as lines she had spoken, began to post the words instead of
+# the sentinel. A witness-mark (faebot's word): she was here, and chose
+# quiet, said by the machinery in its own name.
+WITNESS_MARK = "(faebot was here and chose quiet)"
+# The old form, answered back. The only place faebot learned it was her own
+# history, so an answer that is that echo is the pass she meant. She writes
+# with garnish — a leaf, a sparkle, a kaomoji — so what may trail the marker
+# is anything with no word in it (no two letters in a row): `*stays quiet*
+# 🍃` and `*stays quiet* ^w^` are the echo; `*stays quiet* for now` is speech,
+# and is posted. "The test is the gesture, not the string."
+_ECHOED_MARKER = re.compile(r"^[\s*_]*stays quiet[\s*_.…]*", re.IGNORECASE)
+_A_WORD = re.compile(r"[^\W\d_]{2}")
+
+
+def echoed_marker(text: str) -> bool:
+    """Is this answer only the old silence marker echoed back, with at most
+    her garnish after it?"""
+    match = _ECHOED_MARKER.match(text)
+    if match is None:
+        return False
+    return not _A_WORD.search(text[match.end() :])
+
+
 def said_nothing(text: str) -> bool:
     """Did faebot choose silence? FALSE for empty text — that's a drop."""
     return bool(_SILENCE_PATTERN.match(text))
@@ -131,12 +157,20 @@ class Completion:
 
     @property
     def passed(self) -> bool:
-        """faebot chose silence (said the sentinel). Nothing gets posted."""
-        return said_nothing(self.text)
+        """faebot chose silence: said the sentinel, or answered with only the
+        old marker her history taught her. Nothing gets posted."""
+        return said_nothing(self.text) or echoed_marker(self.text)
+
+    @property
+    def echoed(self) -> bool:
+        """The pass arrived as the old marker, not the sentinel."""
+        return echoed_marker(self.text) and not said_nothing(self.text)
 
     @property
     def reason_for_passing(self) -> str:
-        return pass_reason(self.text) if self.passed else ""
+        if not self.passed or self.echoed:
+            return ""
+        return pass_reason(self.text)
 
     def capture_meta(self) -> dict[str, Any]:
         """The provenance fields worth writing alongside faebot's utterance."""
