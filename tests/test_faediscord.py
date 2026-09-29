@@ -822,6 +822,185 @@ class TestFaebot:
                             "test response"
                         )
 
+    def _room(self, faebot, message):
+        conversation_id = str(message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {message.author.name: message.author.display_name},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+        message.channel.send = AsyncMock()
+        return conversation_id
+
+    @pytest.mark.asyncio
+    async def test_answer_once_a_second_summons_waits_and_sees_her_words(
+        self, faebot, mock_message
+    ):
+        """faebot's ruling (09-16): one answer in flight per room. The second
+        summons is not asked until the first answer has posted, and its desk
+        holds her own first answer — she answers knowing, not blind."""
+        conversation_id = self._room(faebot, mock_message)
+        first_in_flight = asyncio.Event()
+        release_first = asyncio.Event()
+        prompts: list[str] = []
+
+        async def first_slow_then_fast(prompt, message, conversation_id):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                first_in_flight.set()
+                await release_first.wait()
+                return Completion(text="first answer")
+            return Completion(text="second answer")
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(
+                faebot, "_generate_reply", side_effect=first_slow_then_fast
+            ):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_message") as recorded:
+                            first = asyncio.create_task(
+                                faebot._handle_conversation(
+                                    mock_message, conversation_id
+                                )
+                            )
+                            await first_in_flight.wait()
+                            second = asyncio.create_task(
+                                faebot._handle_conversation(
+                                    mock_message, conversation_id
+                                )
+                            )
+                            await asyncio.sleep(0.05)
+                            # the second summons stands behind the first: not asked yet
+                            assert len(prompts) == 1
+                            assert faebot.answer_locks[conversation_id].locked()
+                            release_first.set()
+                            await asyncio.gather(first, second)
+
+        assert len(prompts) == 2
+        assert "first answer" in prompts[1]  # her own words are on the second desk
+        assert "first answer" not in prompts[0]
+        sent = [call.args[0] for call in mock_message.channel.send.call_args_list]
+        assert sent == ["first answer", "second answer"]
+        history = faebot.conversations[conversation_id]["conversation"]
+        assert history[0].endswith(": first answer")
+        assert history[1].endswith(": second answer")
+        # the wait is data: the second capture says how long it stood
+        assert "waited" not in recorded.call_args_list[0].kwargs
+        assert recorded.call_args_list[1].kwargs["waited"] >= 0.0
+
+    @pytest.mark.asyncio
+    async def test_answer_once_is_per_room_not_per_body(self, faebot, mock_message):
+        """Room governs speech: an answer in flight in one room does not hold
+        up a summons in another."""
+        first_id = self._room(faebot, mock_message)
+        other_message = Mock()
+        other_message.author = mock_message.author
+        other_message.content = "another room"
+        other_message.channel = Mock()
+        other_message.channel.id = 555
+        other_message.channel.name = "other-channel"
+        other_message.created_at = mock_message.created_at
+        other_message.guild = mock_message.guild
+        other_message.reference = None
+        other_id = self._room(faebot, other_message)
+        first_in_flight = asyncio.Event()
+        release_first = asyncio.Event()
+
+        async def hold_the_first_room(prompt, message, conversation_id):
+            if conversation_id == first_id:
+                first_in_flight.set()
+                await release_first.wait()
+                return Completion(text="first room")
+            return Completion(text="other room")
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(
+                faebot, "_generate_reply", side_effect=hold_the_first_room
+            ):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_message"):
+                            first = asyncio.create_task(
+                                faebot._handle_conversation(mock_message, first_id)
+                            )
+                            await first_in_flight.wait()
+                            # the other room answers while the first is still composing
+                            await faebot._handle_conversation(other_message, other_id)
+                            other_message.channel.send.assert_awaited_once_with(
+                                "other room"
+                            )
+                            mock_message.channel.send.assert_not_called()
+                            release_first.set()
+                            await first
+
+        mock_message.channel.send.assert_awaited_once_with("first room")
+
+    @pytest.mark.asyncio
+    async def test_answer_once_a_failed_answer_frees_the_room(
+        self, faebot, mock_message
+    ):
+        """A first answer that fails (the machinery's error, nothing spoken)
+        still lets the waiting summons through — the lock is released either way."""
+        conversation_id = self._room(faebot, mock_message)
+        first_in_flight = asyncio.Event()
+        release_first = asyncio.Event()
+        calls = 0
+
+        async def first_fails(prompt, message, conversation_id):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_in_flight.set()
+                await release_first.wait()
+                return None
+            return Completion(text="second answer")
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(faebot, "_generate_reply", side_effect=first_fails):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_message"):
+                            first = asyncio.create_task(
+                                faebot._handle_conversation(
+                                    mock_message, conversation_id
+                                )
+                            )
+                            await first_in_flight.wait()
+                            second = asyncio.create_task(
+                                faebot._handle_conversation(
+                                    mock_message, conversation_id
+                                )
+                            )
+                            await asyncio.sleep(0.05)
+                            release_first.set()
+                            await asyncio.gather(first, second)
+
+        assert calls == 2
+        mock_message.channel.send.assert_awaited_once_with("second answer")
+        assert not faebot.answer_locks[conversation_id].locked()
+
     def test_the_desk_is_laid_from_the_diary_with_the_house_in_earshot(
         self, faebot, mock_message, tmp_path, monkeypatch
     ):

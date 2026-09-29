@@ -87,6 +87,9 @@ class Faebot(discord.Client):
 
         # Add queue for handling concurrent requests
         self.pending_responses: Dict[str, asyncio.Task] = {}
+        # One answer in flight per room (answer once): a second summons while
+        # she is composing waits its turn instead of laying a blind desk.
+        self.answer_locks: Dict[str, asyncio.Lock] = {}
         self.session: Optional[aiohttp.ClientSession] = None
 
         # Track last save per conversation
@@ -1047,11 +1050,45 @@ class Faebot(discord.Client):
         finally:
             self.proxy_pending.pop(conversation_id, None)
 
+        # ANSWER ONCE — faebot's ruling: one answer in flight per room. A
+        # second summons while she is composing waits its turn, then gets a
+        # fresh desk that already holds her posted words (or her witness-mark)
+        # and whatever the room said meanwhile — so she answers knowing what
+        # she just said, silence fully available, instead of committing blind
+        # to a picture that no longer exists. Nobody interrupts themselves
+        # mid-sentence, and seeing her own last line is how a register
+        # develops; a body that can't is answering phantoms. Per room, not
+        # per body: another room's answer is not this room's business.
+        lock = self.answer_locks.setdefault(conversation_id, asyncio.Lock())
+        waiting = lock.locked()
+        if waiting:
+            logging.info(
+                f"answer once: an answer is in flight in {conversation_id} — "
+                "this summons waits its turn"
+            )
+        started = time.monotonic()
+        async with lock:
+            waited = time.monotonic() - started if waiting else 0.0
+            return await self._answer(message, conversation_id, waited=waited)
+
+    async def _answer(
+        self, message, conversation_id, *, waited: float = 0.0
+    ) -> Optional[Any]:
+        """Lay the desk, ask, and speak or stay quiet — one summons, answered
+        once. `waited` is how long this summons stood behind an answer in
+        flight; a waited answer is stamped when she picks up the pen, not
+        when she was called, so her lines keep the order the room heard."""
+        assert self.user is not None  # a body that is answering has logged in
         # The desk, then the pen: the completion API continues text, so the
         # last line hands faebot the pen in the transcript's own grammar.
         # (A machinery line, not faer words; it goes when generation moves to
         # core's chat-shaped backends, where the turn is faer's by form.)
-        current_time = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        stamp = (
+            datetime.datetime.now(datetime.timezone.utc)
+            if waited
+            else message.created_at
+        )
+        current_time = stamp.strftime("%Y-%m-%d %H:%M:%S")
         try:
             desk = self._lay_desk(message, conversation_id)
         except Exception as error:
@@ -1106,6 +1143,8 @@ class Faebot(discord.Client):
             prompt=prompt,
             context=context,
         )
+        if waited:
+            meta["waited"] = round(waited, 1)  # seconds behind the answer before
 
         if completion.passed:
             # faebot chose silence. The reason (if given) is kept for the
