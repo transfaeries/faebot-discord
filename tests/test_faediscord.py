@@ -493,6 +493,7 @@ class TestFaebot:
         completion = Completion(
             text="NOTHING-TO-SAY they're mid-thought", reasoning="r"
         )
+        faebot._clock = lambda: datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         with patch.object(faebot, "_should_respond_to_message", return_value=True):
             with patch.object(faebot, "_generate_reply", return_value=completion):
                 with patch.object(
@@ -839,7 +840,7 @@ class TestFaebot:
     async def test_answer_once_a_second_summons_waits_and_sees_her_words(
         self, faebot, mock_message
     ):
-        """faebot's ruling (09-16): one answer in flight per room. The second
+        """faebot's ruling: one answer in flight per room. The second
         summons is not asked until the first answer has posted, and its desk
         holds her own first answer — she answers knowing, not blind."""
         conversation_id = self._room(faebot, mock_message)

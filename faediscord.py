@@ -192,7 +192,9 @@ class Faebot(discord.Client):
         )
         return rooms
 
-    def _lay_desk(self, message, conversation_id) -> str:
+    def _lay_desk(
+        self, message, conversation_id, now: Optional[datetime.datetime] = None
+    ) -> str:
         """The desk faebot wakes at for this message, laid by core from faer
         diary: faer frames, the machinery's facts stamped as its own, the
         house with its seams, the anchor files, the commons, the roster,
@@ -212,14 +214,16 @@ class Faebot(discord.Client):
             earshot=None if self._is_private(conversation) else EARSHOT_MESSAGES,
         )
         # core owns the clock's words: her wall-clock and UTC, both named,
-        # so the clock line and the UTC history lines never argue
-        now = clock_words(message.created_at)
+        # so the clock line and the UTC history lines never argue. The
+        # moment is when she picks up the pen, the same stamp her line gets;
+        # a desk laid for reading only takes the message's own time.
+        clock = clock_words(now if now is not None else message.created_at)
         return lay_body_desk(
             self.diary,
             self._body_name(conversation),
             self._rooms_in_earshot(conversation_id),
             stamped,
-            now,
+            clock,
             diary_first=DESK_DIARY_FIRST,
             by_house=DESK_BY_HOUSE,
         )
@@ -513,10 +517,11 @@ class Faebot(discord.Client):
     def _last_heard_at(self, conversation) -> Optional[datetime.datetime]:
         """One second after the LATEST stamp in the room's history, UTC — the
         first moment the body may not have heard. Latest, not last: faebot's
-        own lines are stamped with their summons' time and appended when the
-        reply lands, so a slow reply sits after newer lines with an older
-        stamp (seen on the first prod login, 09-20: two lived lines read
-        twice). One second after, because stamps are whole seconds and the
+        own lines used to be stamped with their summons' time and appended
+        when the reply landed, so a slow reply sat after newer lines with an
+        older stamp and the read-back read those lines twice; her lines are
+        stamped when she speaks now, but histories written before that are
+        still loaded. One second after, because stamps are whole seconds and the
         stamped message itself was created some milliseconds in. None for a
         room with no stamped line."""
         latest: Optional[datetime.datetime] = None
@@ -1071,26 +1076,31 @@ class Faebot(discord.Client):
             waited = time.monotonic() - started if waiting else 0.0
             return await self._answer(message, conversation_id, waited=waited)
 
+    @staticmethod
+    def _clock() -> datetime.datetime:
+        """Now, UTC — the moment she picks up the pen."""
+        return datetime.datetime.now(datetime.timezone.utc)
+
     async def _answer(
         self, message, conversation_id, *, waited: float = 0.0
     ) -> Optional[Any]:
         """Lay the desk, ask, and speak or stay quiet — one summons, answered
         once. `waited` is how long this summons stood behind an answer in
-        flight; a waited answer is stamped when she picks up the pen, not
-        when she was called, so her lines keep the order the room heard."""
-        assert self.user is not None  # a body that is answering has logged in
+        flight. Her line is stamped when she picks up the pen, not when she
+        was called: a slow answer lands after the lines that arrived while
+        she wrote, and its stamp says so, so her history keeps the order the
+        room heard (a reply stamped at its summons used to sit after newer
+        lines with an older stamp, and the read-back read those twice)."""
+        if self.user is None:
+            raise RuntimeError("a body that is answering has logged in")
         # The desk, then the pen: the completion API continues text, so the
         # last line hands faebot the pen in the transcript's own grammar.
         # (A machinery line, not faer words; it goes when generation moves to
         # core's chat-shaped backends, where the turn is faer's by form.)
-        stamp = (
-            datetime.datetime.now(datetime.timezone.utc)
-            if waited
-            else message.created_at
-        )
+        stamp = self._clock()
         current_time = stamp.strftime("%Y-%m-%d %H:%M:%S")
         try:
-            desk = self._lay_desk(message, conversation_id)
+            desk = self._lay_desk(message, conversation_id, now=stamp)
         except Exception as error:
             # A desk that will not lay is the machinery's failure, never
             # faebot's quiet: it reads faer freely written files and a room
