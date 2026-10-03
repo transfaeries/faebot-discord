@@ -36,7 +36,6 @@ All commands use the `fae;` prefix (or `faedev;` in dev mode). Admin only.
 | Command | Description |
 |---|---|
 | `fae;invite` | Invite faebot to the current channel |
-| `fae;forget [id]` | Clear conversation memory |
 | `fae;conversations` | List active conversations |
 | `fae;frequency [0-1]` | Check or set reply frequency |
 | `fae;history [n]` | Check or set conversation history length |

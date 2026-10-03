@@ -91,48 +91,6 @@ async def _invite_conversation(bot, message, message_tokens=None, conversation_i
     )
 
 
-@admin_command("forget")
-async def _forget_conversation(bot, message, message_tokens, conversation_id):
-    """Forget a conversation by clearing its memory"""
-    # Check if there are conversations to forget
-    if len(bot.conversations) == 0:
-        logging.info(
-            f"asked to clear memory, but there are no conversations. Message was {message.content}"
-        )
-        return await message.channel.send("there are no conversations to forget")
-
-    # Determine which conversation to forget
-    to_forget = None
-
-    # If no conversation ID provided, use current
-    if len(message_tokens) < 2:
-        to_forget = conversation_id
-        logging.info(
-            f"asked to forget without providing a conversation id, using current conversation {conversation_id}"
-        )
-    # If ID provided, validate it
-    else:
-        provided_id = message_tokens[1]
-        if provided_id in bot.conversations:
-            to_forget = provided_id
-        else:
-            logging.info(
-                f"asked to forget conversation {provided_id}, but it does not exist. Message was {message.content}"
-            )
-            return await message.channel.send(
-                f"Conversation ID '{provided_id}' does not exist. Please provide a valid conversation ID."
-            )
-
-    # Clear the conversation from memory
-    bot.conversation = []
-    bot.conversations[to_forget]["conversation"] = bot.conversation
-
-    logging.info(
-        f"Admin {message.author.name} cleared memory for conversation {to_forget}"
-    )
-    return await message.channel.send(f"cleared conversation {to_forget}")
-
-
 @admin_command("help")
 async def _admin_help(bot, message, message_tokens=None, conversation_id=None):
     """Show available admin commands"""
