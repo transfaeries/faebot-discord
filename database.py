@@ -221,7 +221,7 @@ class FaebotDatabase:
         The metadata blob now holds only identity (name, conversants) — the
         four dials live in channel_settings (the settings split), so this write
         never touches them. The old shrink-guard is gone with them: history
-        trimming and fae;forget are legitimate, so a shorter history is saved
+        trimming is legitimate, so a shorter history is saved
         faithfully by the plain upsert. (Single-instance bot — no concurrent
         writer to guard against; revisit if that ever changes.)
         """

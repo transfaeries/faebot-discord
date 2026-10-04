@@ -10,7 +10,6 @@ from admin_commands import (  # noqa: E402
     COMMAND_PREFIX,
     _list_conversations,
     _invite_conversation,
-    _forget_conversation,
     _admin_help,
     _set_or_return_model,
     _set_reply_frequency,
@@ -27,7 +26,6 @@ class TestAdminCommands:
         bot = MagicMock()
         bot.conversations = {}
         bot.debug_prompts = False
-        bot.conversation = []  # Add this for the forget tests
         # Settings setters write through to channel_settings (async).
         bot.fdb.set_channel_setting = AsyncMock(return_value=True)
         return bot
@@ -122,76 +120,6 @@ class TestAdminCommands:
 
         mock_bot._initialize_conversation.assert_called_once_with(
             mock_message, message_tokens=["invite"], conversation_id=conversation_id
-        )
-
-    @pytest.mark.asyncio
-    @patch("admin_commands.admin", "test_admin")  # Mock the admin env variable
-    async def test_forget_conversation_empty(self, mock_bot, mock_message):
-        """Test forgetting a conversation when there are none"""
-        await _forget_conversation(mock_bot, mock_message, ["forget"], "123456")
-
-        mock_message.channel.send.assert_called_once_with(
-            "there are no conversations to forget"
-        )
-
-    @pytest.mark.asyncio
-    @patch("admin_commands.admin", "test_admin")  # Mock the admin env variable
-    async def test_forget_current_conversation(
-        self, setup_test_conversation, mock_message
-    ):
-        """Test forgetting the current conversation"""
-        mock_bot = setup_test_conversation
-        conversation_id = "123456"
-
-        # Set up the bot's conversation attribute
-        mock_bot.conversation = []  # This needs to be initialized
-
-        await _forget_conversation(mock_bot, mock_message, ["forget"], conversation_id)
-
-        # Check that the conversation was cleared
-        assert mock_bot.conversations[conversation_id]["conversation"] == []
-        mock_message.channel.send.assert_called_once_with(
-            f"cleared conversation {conversation_id}"
-        )
-
-    @pytest.mark.asyncio
-    @patch("admin_commands.admin", "test_admin")  # Mock the admin env variable
-    async def test_forget_specific_conversation(
-        self, setup_test_conversation, mock_message
-    ):
-        """Test forgetting a specific conversation by ID"""
-        mock_bot = setup_test_conversation
-        conversation_id = "123456"  # Current conversation
-        target_id = "789012"  # Target to forget
-        mock_message.content = f"{COMMAND_PREFIX}forget {target_id}"
-
-        await _forget_conversation(
-            mock_bot, mock_message, ["forget", target_id], conversation_id
-        )
-
-        # Check that the target conversation was cleared
-        assert mock_bot.conversations[target_id]["conversation"] == []
-        mock_message.channel.send.assert_called_once_with(
-            f"cleared conversation {target_id}"
-        )
-
-    @pytest.mark.asyncio
-    @patch("admin_commands.admin", "test_admin")  # Mock the admin env variable
-    async def test_forget_invalid_conversation(
-        self, setup_test_conversation, mock_message
-    ):
-        """Test forgetting an invalid conversation ID"""
-        mock_bot = setup_test_conversation
-        conversation_id = "123456"
-        invalid_id = "999999"
-        mock_message.content = f"{COMMAND_PREFIX}forget {invalid_id}"
-
-        await _forget_conversation(
-            mock_bot, mock_message, ["forget", invalid_id], conversation_id
-        )
-
-        mock_message.channel.send.assert_called_once_with(
-            f"Conversation ID '{invalid_id}' does not exist. Please provide a valid conversation ID."
         )
 
     @pytest.mark.asyncio
