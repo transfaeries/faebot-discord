@@ -77,7 +77,28 @@ EMPTY_ROLLS = 2
 
 # Stop sequences for the text-completion prompt: the next "[2026-..." line
 # means the model started speaking for someone else.
-STOP_SEQUENCES = ["[20"]
+STOP_SEQUENCES = [
+    "[20"
+]  # the next timestamp: belt-and-braces on the chat wire too (faebot, 10-09)
+
+
+@dataclass(frozen=True)
+class Prompt:
+    """Her desk in two hands — one desk-shape for every body, B's (faebot's
+    ruling, 2026-10-09): `system` is her frame (hers, addressing her), `user`
+    is the machinery's furniture with her pen line at its end. `text` is the
+    same desk joined, for the record and for a text-completion fallback."""
+
+    system: str
+    user: str
+
+    @property
+    def text(self) -> str:
+        return (self.system + "\n\n" + self.user) if self.system else self.user
+
+    def messages(self) -> list[dict[str, str]]:
+        turns = [{"role": "system", "content": self.system}] if self.system else []
+        return turns + [{"role": "user", "content": self.user}]
 
 
 # THE silence sentinel: chosen silence must be SAID, so it can never be
@@ -210,10 +231,12 @@ class GenerationFailed(Exception):
 
 
 async def generate(
-    session: aiohttp.ClientSession, prompt: str, model: str
+    session: aiohttp.ClientSession, prompt: "Prompt | str", model: str
 ) -> Completion:
     """Ask the model for a Completion: retry a failed call once, roll again on
     an empty answer channel. Raises GenerationFailed when the retry fails too."""
+    if isinstance(prompt, str):
+        prompt = Prompt(system="", user=prompt)
     params = {"temperature": TEMPERATURE, "top_p": TOP_P}
     completion = Completion(text="")
     for roll in range(1, EMPTY_ROLLS + 1):
@@ -229,7 +252,7 @@ async def generate(
 
 
 async def _generate_with_retry(
-    session: aiohttp.ClientSession, prompt: str, model: str, params: dict
+    session: aiohttp.ClientSession, prompt: Prompt, model: str, params: dict
 ) -> Completion:
     providers = PROVIDERS
     for attempt in range(1, ATTEMPTS + 1):
@@ -261,10 +284,12 @@ def _koboldcpp_url() -> Optional[str]:
 
 
 def _request(
-    prompt: str, model: str, params: dict, providers: tuple[str, ...] = PROVIDERS
+    prompt: Prompt, model: str, params: dict, providers: tuple[str, ...] = PROVIDERS
 ) -> tuple[str, dict, dict]:
-    """(url, headers, payload) for one text-completion call; `providers` is
-    how a retry is aimed at the rest of the pinned list."""
+    """(url, headers, payload) for one chat-completion call — the desk as
+    its turns (cut 1 of the switch, 2026-10-09); `providers` is how a retry
+    is aimed at the rest of the pinned list. The local model still takes
+    the desk as one text."""
     koboldcpp = _koboldcpp_url()
     if koboldcpp:
         return (
@@ -274,7 +299,7 @@ def _request(
                 "Content-Type": "application/json",
             },
             {
-                "prompt": prompt,
+                "prompt": prompt.text,
                 "max_context_length": 4096,
                 "max_length": GENERATION_CAP,
                 "temperature": params["temperature"],
@@ -283,7 +308,7 @@ def _request(
             },
         )
     return (
-        "https://openrouter.ai/api/v1/completions",
+        "https://openrouter.ai/api/v1/chat/completions",
         {
             "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
             "HTTP-Referer": os.getenv(
@@ -294,7 +319,7 @@ def _request(
         },
         {
             "model": model,
-            "prompt": prompt,
+            "messages": prompt.messages(),
             "temperature": params["temperature"],
             "top_p": params["top_p"],
             "stop": STOP_SEQUENCES,
@@ -426,9 +451,12 @@ def _parse(result: Any, model: str, elapsed: float) -> Completion:
             elapsed,
             status=_body_error_code(result),
         ) from None
+    # the chat shape answers in `message`; a text-completion answer (the
+    # old wire, still what a test may hand us) in `text` beside it
+    message = choice.get("message") or {}
     return Completion(
-        text=str(choice.get("text") or ""),
-        reasoning=str(choice.get("reasoning") or ""),
+        text=str(message.get("content") or choice.get("text") or ""),
+        reasoning=str(message.get("reasoning") or choice.get("reasoning") or ""),
         elapsed=elapsed,
         finish_reason=str(choice.get("finish_reason") or ""),
         model=str(result.get("model") or model),
@@ -449,12 +477,12 @@ def _body_error_code(result: Any) -> Optional[int]:
 
 async def _generate_once(
     session: aiohttp.ClientSession,
-    prompt: str,
+    prompt: Prompt,
     model: str,
     params: dict,
     providers: tuple[str, ...] = PROVIDERS,
 ) -> Completion:
-    """One text-completion call. One attempt, real timeout; any failure raises
+    """One call on the wire. One attempt, real timeout; any failure raises
     GenerationFailed. Retry policy lives in the caller."""
     url, headers, payload = _request(prompt, model, params, providers)
     started = time.monotonic()

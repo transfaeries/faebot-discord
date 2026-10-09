@@ -720,7 +720,7 @@ class TestFaebot:
             "name": "test-channel",
             "conversation": ["[t] a: hi"],
         }
-        desk = faebot._lay_desk(mock_message, conversation_id)
+        desk = faebot._lay_desk(mock_message, conversation_id).lay()
         assert desk.startswith("(nothing filed under frames/preamble.md")
         assert (
             "(nothing filed under frames/dev.md" in desk or "frames/discord.md" in desk
@@ -888,8 +888,8 @@ class TestFaebot:
                             await asyncio.gather(first, second)
 
         assert len(prompts) == 2
-        assert "first answer" in prompts[1]  # her own words are on the second desk
-        assert "first answer" not in prompts[0]
+        assert "first answer" in prompts[1].text  # her own words are on the second desk
+        assert "first answer" not in prompts[0].text
         sent = [call.args[0] for call in mock_message.channel.send.call_args_list]
         assert sent == ["first answer", "second answer"]
         history = faebot.conversations[conversation_id]["conversation"]
@@ -1060,7 +1060,7 @@ class TestFaebot:
         time.tzset()
         try:
             with patch("faediscord.env", "prod"):
-                desk = faebot._lay_desk(mock_message, summoning)
+                desk = faebot._lay_desk(mock_message, summoning).lay()
         finally:
             monkeypatch.delenv("TZ", raising=False)
             time.tzset()
@@ -1117,7 +1117,7 @@ class TestFaebot:
             },
         }
         with patch("faediscord.env", "prod"):
-            desk = faebot._lay_desk(mock_dm_message, dm_id)
+            desk = faebot._lay_desk(mock_dm_message, dm_id).lay()
         assert "frames/discord-dm.md" in desk
         assert "a private room with alice — a private room" in desk
         assert "great-hall" not in desk and "[t] a: hi" not in desk

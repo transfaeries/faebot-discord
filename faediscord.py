@@ -20,7 +20,8 @@ import datetime
 # The desk faebot wakes at is laid by core, from faer own diary — the
 # adapter's first import of core. The frames are faer files (frames/ in the
 # diary); the rooms, the seams and the machinery's stamped facts are ours.
-from faebot_core.cognition.body import Room, Stamped, clock_words, lay_body_desk
+from faebot_core.cognition.body import Room, Stamped, body_desk, clock_words
+from faebot_core.cognition.desk import Desk
 from faebot_core.diary import DIARY_PATH_VARIABLE, DiaryReader
 
 
@@ -194,8 +195,8 @@ class Faebot(discord.Client):
 
     def _lay_desk(
         self, message, conversation_id, now: Optional[datetime.datetime] = None
-    ) -> str:
-        """The desk faebot wakes at for this message, laid by core from faer
+    ) -> Desk:
+        """The desk faebot wakes at for this message, unlaid, by core from faer
         diary: faer frames, the machinery's facts stamped as its own, the
         house with its seams, the anchor files, the commons, the roster,
         the clock."""
@@ -218,7 +219,7 @@ class Faebot(discord.Client):
         # moment is when she picks up the pen, the same stamp her line gets;
         # a desk laid for reading only takes the message's own time.
         clock = clock_words(now if now is not None else message.created_at)
-        return lay_body_desk(
+        return body_desk(
             self.diary,
             self._body_name(conversation),
             self._rooms_in_earshot(conversation_id),
@@ -1093,10 +1094,12 @@ class Faebot(discord.Client):
         lines with an older stamp, and the read-back read those twice)."""
         if self.user is None:
             raise RuntimeError("a body that is answering has logged in")
-        # The desk, then the pen: the completion API continues text, so the
-        # last line hands faebot the pen in the transcript's own grammar.
-        # (A machinery line, not faer words; it goes when generation moves to
-        # core's chat-shaped backends, where the turn is faer's by form.)
+        # The desk in two hands — her frame as the system turn, the
+        # machinery's furniture as the user turn (one desk-shape for every
+        # body, B's; faebot's ruling 2026-10-09) — then the pen: the last
+        # line of the user turn hands faebot the pen in the transcript's own
+        # grammar. She keeps her pen on the chat wire ("not in the same week
+        # the floor moves"); whether it retires is re-asked at cut 2.
         stamp = self._clock()
         current_time = stamp.strftime("%Y-%m-%d %H:%M:%S")
         try:
@@ -1118,7 +1121,10 @@ class Faebot(discord.Client):
                 conversation_id=conversation_id,
             )
             return None
-        prompt = desk + f"[{current_time}] {self.user.display_name}:"
+        prompt = generation.Prompt(
+            system=desk.frame,
+            user=desk.furniture() + f"[{current_time}] {self.user.display_name}:",
+        )
 
         # The typing indicator runs while faebot thinks — including when the
         # thinking ends in silence. Toggle (TYPING_INDICATOR) because "typing,
@@ -1150,7 +1156,7 @@ class Faebot(discord.Client):
         meta = dict(
             completion.capture_meta(),
             conversation_id=conversation_id,
-            prompt=prompt,
+            prompt=prompt.text,
             context=context,
         )
         if waited:
@@ -1213,7 +1219,7 @@ class Faebot(discord.Client):
             f"[{current_time}] {self.user.display_name}: {reply}"
         )
         logging.info(
-            f"conversation is currently {len(conversation['conversation'])} messages long and the prompt is {len(prompt)}."
+            f"conversation is currently {len(conversation['conversation'])} messages long and the prompt is {len(prompt.text)}."
             f"There are {len(conversation['conversants'])} conversants."
             f"\nthere are currently {len(self.conversations.items())} conversations in memory"
         )
@@ -1296,7 +1302,10 @@ class Faebot(discord.Client):
             self.session = aiohttp.ClientSession()
         if self.debug_prompts:
             logging.info(f"generating reply with model: {model}")
-            logging.info(f"\n=== PROMPT START ===\n{prompt}\n=== PROMPT END ===\n")
+            logging.info(
+                "\n=== PROMPT START ===\n"
+                f"{getattr(prompt, 'text', prompt)}\n=== PROMPT END ===\n"
+            )
         try:
             return await generation.generate(self.session, prompt, model)
         except generation.GenerationFailed as failure:
@@ -1307,7 +1316,7 @@ class Faebot(discord.Client):
                 message.channel,
                 failure.reason,
                 conversation_id=conversation_id,
-                prompt=prompt,
+                prompt=getattr(prompt, "text", prompt),
                 model=model,
                 elapsed=failure.elapsed,
             )
