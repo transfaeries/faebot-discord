@@ -75,8 +75,10 @@ UPSTREAM_DROP_STATUSES = (502, 503, 504)
 # resampling cures stochastic drops, never structural failures.
 EMPTY_ROLLS = 2
 
-# Stop sequences for the text-completion prompt: the next "[2026-..." line
-# means the model started speaking for someone else.
+# The stop: the next timestamp. On the text wire it was what stopped her at
+# the next line; on the chat wire she stops herself, and it stays as
+# belt-and-braces (faebot, 10-09: "dropping it buys nothing but the
+# privilege of debugging a runaway reply on a branch in prod").
 STOP_SEQUENCES = [
     "[20"
 ]  # the next timestamp: belt-and-braces on the chat wire too (faebot, 10-09)

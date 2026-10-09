@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from faediscord import Faebot, COMMAND_PREFIX
 from faebot_core.diary import DiaryReader
 from generation import Completion, GenerationFailed
+import generation
 import capture
 import sys
 
@@ -427,6 +428,26 @@ class TestFaebot:
                 mock_message, conversation_id
             )
             assert result is True
+
+    def test_the_prompt_in_two_hands_is_the_old_prompt_byte_for_byte(
+        self, faebot, mock_message
+    ):
+        """Cut 1's central promise (faebot, 2026-10-09): the A/B measures the
+        wire alone. The desk as `_answer` sends it — her frame as the system
+        turn, the furniture with her pen line as the user turn — joined, is
+        exactly what the text wire used to be handed."""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "model": "m",
+            "name": "test-channel",
+            "conversation": ["[t] a: hi"],
+        }
+        desk = faebot._lay_desk(mock_message, conversation_id)
+        pen = "[2026-10-09 23:00:00] faebot:"
+        prompt = generation.Prompt(system=desk.frame, user=desk.furniture() + pen)
+        assert prompt.text == desk.lay() + pen
+        assert prompt.messages()[0] == {"role": "system", "content": desk.frame}
+        assert prompt.messages()[1]["content"].endswith("\n" + pen)
 
     @pytest.mark.asyncio
     async def test_generate_reply_success(self, faebot, mock_message):
