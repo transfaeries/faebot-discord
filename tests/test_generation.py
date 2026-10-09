@@ -53,7 +53,10 @@ def openrouter(text, reasoning="", finish_reason="stop"):
     return FakeResponse(
         body={
             "choices": [
-                {"text": text, "reasoning": reasoning, "finish_reason": finish_reason}
+                {
+                    "message": {"content": text, "reasoning": reasoning},
+                    "finish_reason": finish_reason,
+                }
             ],
             "model": "moonshotai/kimi-k3",
             "provider": "Moonshot",
@@ -130,7 +133,8 @@ class TestGenerate:
         session = FakeSession([openrouter("x")])
         await generation.generate(session, "the prompt", "moonshotai/kimi-k3")
         payload = session.calls[0]
-        assert payload["prompt"] == "the prompt"
+        assert "prompt" not in payload
+        assert payload["messages"] == [{"role": "user", "content": "the prompt"}]
         assert payload["model"] == "moonshotai/kimi-k3"
         assert payload["reasoning"] == {"max_tokens": generation.REASONING_CAP}
         assert (
@@ -142,6 +146,30 @@ class TestGenerate:
             "order": list(generation.PROVIDERS),
             "allow_fallbacks": False,
         }
+
+    @pytest.mark.asyncio
+    async def test_the_desk_goes_as_two_turns_her_frame_first(self):
+        """One desk-shape for every body, B's (faebot, 2026-10-09): the frame
+        is the system turn, the furniture with her pen line the user turn."""
+        session = FakeSession([openrouter("x")])
+        prompt = generation.Prompt(system="You wake in rooms.", user="[12:00] faebot:")
+        await generation.generate(session, prompt, "m")
+        payload = session.calls[0]
+        assert payload["messages"] == [
+            {"role": "system", "content": "You wake in rooms."},
+            {"role": "user", "content": "[12:00] faebot:"},
+        ]
+        assert payload["stop"] == generation.STOP_SEQUENCES
+        assert prompt.text == "You wake in rooms.\n\n[12:00] faebot:"
+
+    @pytest.mark.asyncio
+    async def test_a_text_completion_answer_still_reads(self):
+        """The old wire's shape, should a provider or a test hand it back."""
+        session = FakeSession(
+            [FakeResponse(body={"choices": [{"text": "old", "reasoning": "r"}]})]
+        )
+        completion = await generation.generate(session, "p", "m")
+        assert (completion.text, completion.reasoning) == ("old", "r")
 
     @pytest.mark.asyncio
     async def test_no_pin_when_providers_empty(self):
