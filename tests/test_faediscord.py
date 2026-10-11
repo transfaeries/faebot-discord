@@ -2088,6 +2088,7 @@ class TestTheTurn:
         mock_message.channel.send.assert_called_once_with("bract keeps the hedge")
         rows["mutters"].assert_called_once()
         assert rows["mutters"].call_args.args[1] == "let me look at bract first"
+        assert rows["mutters"].call_args.kwargs["sentinel_beside_call"] is False
         assert rows["messages"].call_args.kwargs["mutters"] == 1
         # the mutter went back to her on the wire as her own message, whole
         assert prompts[1].turns[0]["content"] == "let me look at bract first"
@@ -2217,6 +2218,59 @@ class TestTheTurn:
             .startswith(f"the turn did not end within {MAX_CALLS_PER_TURN} calls")
         )
         assert len(prompts) == MAX_CALLS_PER_TURN + 1
+
+    @pytest.mark.asyncio
+    async def test_after_the_budget_her_pass_is_honored_even_with_company(
+        self, faebot, mock_message
+    ):
+        from faebot_core.cognition.verbs import MAX_CALLS_PER_TURN
+        import desk_verbs
+
+        conversation_id = self._room(faebot, mock_message)
+        answers = [
+            self._answer(calls=[self._call("open", path="beings/bract")])
+            for _ in range(MAX_CALLS_PER_TURN)
+        ] + [
+            self._answer(
+                calls=[
+                    self._call("open", path="beings/bract", again="yes"),
+                    self._call("pass", why="enough looking"),
+                ]
+            )
+        ]
+        prompts, rows = await self._drive(
+            faebot, mock_message, conversation_id, answers
+        )
+        mock_message.channel.send.assert_not_called()
+        rows["errors"].assert_not_called()
+        rows["passes"].assert_called_once()
+        assert rows["passes"].call_args.args[1] == "enough looking"
+        assert rows["passes"].call_args.kwargs["via"] == "verb"
+        # the open beside it was not run: only pass was on offer (the first
+        # open recorded the page; the rest were told it was open already)
+        assert rows["opens"].call_count == 1
+        assert prompts[-1].tools == desk_verbs.PASS_ONLY
+
+    @pytest.mark.asyncio
+    async def test_the_old_sentinel_beside_a_call_is_a_mutter_and_counted(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    "NOTHING-TO-SAY", calls=[self._call("open", path="beings/bract")]
+                ),
+                self._answer(calls=[self._call("pass")]),
+            ],
+        )
+        mock_message.channel.send.assert_not_called()
+        rows["mutters"].assert_called_once()
+        assert rows["mutters"].call_args.kwargs["sentinel_beside_call"] is True
+        assert rows["passes"].call_args.kwargs["via"] == "verb"
 
     @pytest.mark.asyncio
     async def test_open_then_pass_in_one_answer_opens_and_then_keeps_quiet(

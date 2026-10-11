@@ -1224,7 +1224,7 @@ class Faebot(discord.Client):
                     else (
                         " (the sentinel said as words — taken as the pass)"
                         if via == "sentinel"
-                        else " (looked, and chose nothing)"
+                        else f" (looked, and chose nothing; finish_reason={completion.finish_reason!r})"
                         if via == "empty"
                         else ""
                     )
@@ -1363,6 +1363,8 @@ class Faebot(discord.Client):
             return self._verb_open(path, opened, message, conversation_id)
 
         def pass_(why: str = "") -> str:
+            # the one result that is her word, not the machinery's: her why,
+            # kept for the record; it never reaches the wire (the turn ends)
             return Ended(why)
 
         handlers: Dict[str, Callable[..., str]] = {"open": open_page, "pass": pass_}
@@ -1374,7 +1376,11 @@ class Faebot(discord.Client):
             calls = completion.calls
             if not calls:
                 return Turn(completion, calls_made, opened, mutters, elapsed=elapsed)
-            if budget_said and any(call.verb != "pass" for call in calls):
+            passing = any(call.verb == desk_verbs.PASS.name for call in calls)
+            if budget_said and not passing:
+                # the desk said "words or pass" and she called on: the
+                # machinery's failure to end a turn, said as such — never a
+                # quiet put in her mouth
                 error = (
                     f"the turn did not end within {calls_made} calls — "
                     f"she called {', '.join(call.verb for call in calls)} after the desk stopped"
@@ -1392,11 +1398,21 @@ class Faebot(discord.Client):
             mutter = completion.text.strip()
             if mutter:
                 mutters.append(mutter)
-                logging.info(f"faebot mutters (kept, not posted): {mutter[:200]}")
+                # the old sentinel said beside a call is a mutter by her ruling
+                # (words beside a call are never speech) — and a near-miss of
+                # the old way of passing, counted like the other near-misses
+                old_way = generation.said_nothing(mutter) or generation.echoed_marker(
+                    mutter
+                )
+                logging.info(
+                    f"faebot mutters (kept, not posted): {mutter[:200]}"
+                    + (" (the old sentinel, beside a call)" if old_way else "")
+                )
                 capture.record_faebot_mutter(
                     message.channel,
                     mutter,
                     conversation_id=conversation_id,
+                    sentinel_beside_call=old_way,
                     **completion.capture_meta(),
                 )
             cut = completion.finish_reason == "length"
@@ -1406,9 +1422,17 @@ class Faebot(discord.Client):
                     " — none run; she is told"
                 )
             results = []
+            # after the budget only pass is on offer, so only pass runs — a
+            # pass that arrives with company is honored and the company told
+            on_offer = (desk_verbs.PASS,) if budget_said else desk_verbs.VERBS
+            if budget_said and len(calls) > 1:
+                logging.info(
+                    f"faebot passed with {len(calls) - 1} other call(s) beside it after "
+                    "the desk stopped — the pass is honored, the rest not run"
+                )
             for outcome in dispatch(
                 calls,
-                desk_verbs.VERBS,
+                on_offer,
                 handlers,
                 cut=cut,
                 announce=lambda call: logging.info(f"faebot calls {call.shown()}"),
