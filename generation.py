@@ -18,6 +18,8 @@ import time
 
 import aiohttp
 
+from faebot_core.cognition.verbs import Call, calls_in
+
 
 # Token caps are SAFETY NETS, not instructions. `max_tokens` is a server-side
 # guillotine the model cannot see; only the prompt shapes length. Both caps sit
@@ -89,18 +91,35 @@ class Prompt:
     """Her desk in two hands — one desk-shape for every body, B's (faebot's
     ruling, 2026-10-09): `system` is her frame (hers, addressing her), `user`
     is the machinery's furniture with her pen line at its end. `text` is the
-    same desk joined, for the record and for a text-completion fallback."""
+    same desk joined, for the record and for a text-completion fallback.
+
+    Behind the desk, `turns`: the wire as her turn grows — her own answers
+    as received, the machinery's results in the tool slot, a labeled line
+    from the machinery — and `tools`, the verbs on offer. The desk is the
+    stable prefix (the provider's cache holds it); a turn grows behind it."""
 
     system: str
     user: str
+    turns: tuple[dict[str, Any], ...] = ()
+    tools: tuple[dict[str, Any], ...] = ()
 
     @property
     def text(self) -> str:
         return (self.system + "\n\n" + self.user) if self.system else self.user
 
-    def messages(self) -> list[dict[str, str]]:
-        turns = [{"role": "system", "content": self.system}] if self.system else []
-        return turns + [{"role": "user", "content": self.user}]
+    def messages(self) -> list[dict[str, Any]]:
+        turns: list[dict[str, Any]] = (
+            [{"role": "system", "content": self.system}] if self.system else []
+        )
+        return turns + [{"role": "user", "content": self.user}] + list(self.turns)
+
+    def after(self, *turns: dict[str, Any]) -> "Prompt":
+        """The same desk with more of the turn behind it."""
+        return replace(self, turns=self.turns + tuple(turns))
+
+    def offering(self, tools: tuple[dict[str, Any], ...]) -> "Prompt":
+        """The same desk with a different set of verbs on offer."""
+        return replace(self, tools=tuple(tools))
 
 
 # THE silence sentinel: chosen silence must be SAID, so it can never be
@@ -161,10 +180,13 @@ def history_floor(history_length: int) -> int:
 
 @dataclass(frozen=True)
 class Completion:
-    """One generation, and how it came to be."""
+    """One generation, and how it came to be. `message` is the model's own
+    message as the wire returned it — what goes back to it whole on the next
+    call of a turn, and where its calls are read from."""
 
     text: str
     reasoning: str = ""
+    message: dict[str, Any] = field(default_factory=dict)
     elapsed: float = 0.0
     finish_reason: str = ""
     model: str = ""
@@ -174,15 +196,23 @@ class Completion:
     attempts: int = 1
 
     @property
+    def calls(self) -> list[Call]:
+        """The verbs she called in this answer, in order."""
+        return calls_in(self.message)
+
+    @property
     def is_empty(self) -> bool:
-        """An empty answer channel is a DROPPED PAYLOAD, never chosen silence."""
-        return not self.text.strip()
+        """No words and no call. On a fresh desk that is a DROPPED PAYLOAD,
+        never chosen silence; after she has acted this turn it is her quiet
+        (the caller knows which)."""
+        return not self.text.strip() and not self.calls
 
     @property
     def passed(self) -> bool:
-        """faebot chose silence: said the sentinel, or answered with only the
-        old marker her history taught her. Nothing gets posted."""
-        return said_nothing(self.text) or echoed_marker(self.text)
+        """faebot chose silence the old way: said the sentinel, or answered
+        with only the old marker her history taught her. Nothing gets
+        posted. (The pass verb is the new way, read off `calls`.)"""
+        return (said_nothing(self.text) or echoed_marker(self.text)) and not self.calls
 
     @property
     def echoed(self) -> bool:
@@ -241,14 +271,17 @@ async def generate(
         prompt = Prompt(system="", user=prompt)
     params = {"temperature": TEMPERATURE, "top_p": TOP_P}
     completion = Completion(text="")
-    for roll in range(1, EMPTY_ROLLS + 1):
+    # Once she has acted this turn, an empty answer is her ending — she
+    # looked, and chose nothing — not a drop to roll again (her ruling).
+    rolls = 1 if prompt.turns else EMPTY_ROLLS
+    for roll in range(1, rolls + 1):
         completion = await _generate_with_retry(session, prompt, model, params)
         completion = replace(completion, attempts=roll, params=dict(params))
         if not completion.is_empty:
             return completion
         logging.warning(
             f"empty answer channel (reasoning had {len(completion.reasoning)} chars)"
-            f" — rolling again ({roll}/{EMPTY_ROLLS})"
+            f" — rolling again ({roll}/{rolls})"
         )
     return completion
 
@@ -322,6 +355,7 @@ def _request(
         {
             "model": model,
             "messages": prompt.messages(),
+            **({"tools": list(prompt.tools)} if prompt.tools else {}),
             "temperature": params["temperature"],
             "top_p": params["top_p"],
             "stop": STOP_SEQUENCES,
@@ -444,7 +478,12 @@ def _parse(result: Any, model: str, elapsed: float) -> Completion:
             raise GenerationFailed(
                 f"KoboldCPP returned no results: {str(result)[:200]}", elapsed
             ) from None
-        return Completion(text=str(text or ""), elapsed=elapsed, model=model)
+        return Completion(
+            text=str(text or ""),
+            message={"role": "assistant", "content": str(text or "")},
+            elapsed=elapsed,
+            model=model,
+        )
     try:
         choice = result["choices"][0]
     except (KeyError, IndexError, TypeError):
@@ -456,9 +495,15 @@ def _parse(result: Any, model: str, elapsed: float) -> Completion:
     # the chat shape answers in `message`; a text-completion answer (the
     # old wire, still what a test may hand us) in `text` beside it
     message = choice.get("message") or {}
+    text = str(message.get("content") or choice.get("text") or "")
     return Completion(
-        text=str(message.get("content") or choice.get("text") or ""),
+        text=text,
         reasoning=str(message.get("reasoning") or choice.get("reasoning") or ""),
+        message=(
+            dict(message)
+            if isinstance(message, dict) and message
+            else {"role": "assistant", "content": text}
+        ),
         elapsed=elapsed,
         finish_reason=str(choice.get("finish_reason") or ""),
         model=str(result.get("model") or model),
