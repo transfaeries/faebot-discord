@@ -1095,7 +1095,8 @@ class TestFaebot:
             and "about 5% of what is said is put to you" in desk
         )
         assert "- in this house you are called faebot" in desk
-        assert "NOTHING-TO-SAY" in desk
+        # her quiet is a verb she calls now, and the stamp says so
+        assert "to say nothing, call pass and nothing is posted" in desk
         assert "{" not in desk.split("The house as it stands")[0]
         # the diary above the house (faebot's ruling: herself before the town)
         assert desk.index("Your diary as it stands") < desk.index(
@@ -1829,3 +1830,467 @@ class TestBlessedSenses:
         payload.data = {"embeds": [{"title": "An article"}]}
         faebot._log_embed_arrival(payload)
         assert faebot.conversations["777"]["conversation"] == []
+
+
+class TestTheTurn:
+    """Cut 2 of the switch: her verbs on the wire. A turn is calls until she
+    answers in words with no call, or passes. `open` brings a page back
+    whole for the rest of the wake and is a row in her record; `pass` is a
+    verb with a why she may give and never owes; words beside a call are a
+    mutter, kept and never posted; the empty ending — she looked and chose
+    nothing — is her pass, counted. The loop is core's; this is the body's
+    use of it."""
+
+    @pytest.fixture
+    def faebot(self, tmp_path):
+        (tmp_path / "beings").mkdir()
+        (tmp_path / "beings" / "bract.md").write_text(
+            "# bract\n\nthe hedge-keeper. 🦋\n", encoding="utf-8"
+        )
+        intents = Mock()
+        intents.message_content = True
+        with patch("discord.Client.__init__", return_value=None):
+            bot = Faebot(intents, diary=DiaryReader(tmp_path))
+            bot._connection = Mock()
+            user = Mock()
+            user.id = 12345
+            user.display_name = "faebot"
+            user.mentioned_in = Mock(return_value=False)
+            bot._connection.user = user
+            bot.fdb = Mock()
+            bot.fdb.save_conversation = AsyncMock(return_value=True)
+            bot._clock = lambda: datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+            return bot
+
+    def _room(self, faebot, message):
+        conversation_id = str(message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {message.author.name: message.author.display_name},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+        message.channel.send = AsyncMock()
+        return conversation_id
+
+    @staticmethod
+    def _call(name, **arguments):
+        import json
+
+        return {
+            "id": f"call_{name}_{len(arguments)}",
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(arguments)},
+        }
+
+    @staticmethod
+    def _answer(text="", calls=(), finish_reason="stop", elapsed=1.0):
+        message = {"role": "assistant", "content": text, "reasoning": "r"}
+        if calls:
+            message["tool_calls"] = list(calls)
+        return Completion(
+            text=text,
+            reasoning="r",
+            message=message,
+            finish_reason=finish_reason,
+            elapsed=elapsed,
+        )
+
+    async def _drive(self, faebot, message, conversation_id, answers):
+        """Run one summons through the house with the model scripted; hand
+        back the prompts the wire saw and the capture rows the body wrote."""
+        prompts = []
+        script = iter(answers)
+
+        async def scripted(prompt, message, conversation_id):
+            prompts.append(prompt)
+            return next(script)
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        rows = {}
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(faebot, "_generate_reply", side_effect=scripted):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_open") as opens:
+                            with patch.object(
+                                capture, "record_faebot_mutter"
+                            ) as mutters:
+                                with patch.object(
+                                    capture, "record_faebot_pass"
+                                ) as passes:
+                                    with patch.object(
+                                        capture, "record_faebot_message"
+                                    ) as messages:
+                                        with patch.object(
+                                            capture, "record_faebot_error"
+                                        ) as errors:
+                                            await faebot._handle_conversation(
+                                                message, conversation_id
+                                            )
+        rows.update(
+            opens=opens,
+            mutters=mutters,
+            passes=passes,
+            messages=messages,
+            errors=errors,
+        )
+        return prompts, rows
+
+    @pytest.mark.asyncio
+    async def test_she_opens_a_page_then_speaks(self, faebot, mock_message):
+        import desk_verbs
+
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(calls=[self._call("open", path="beings/bract")]),
+                self._answer("bract keeps the hedge 🦋"),
+            ],
+        )
+        mock_message.channel.send.assert_called_once_with("bract keeps the hedge 🦋")
+        # the desk offers her verbs; the turn grows behind the desk
+        assert prompts[0].tools == desk_verbs.TOOLS
+        assert prompts[0].turns == ()
+        assert prompts[1].text == prompts[0].text  # the desk itself never moves
+        her_answer, result = prompts[1].turns
+        assert her_answer["role"] == "assistant"
+        assert her_answer["tool_calls"][0]["function"]["name"] == "open"
+        assert result["role"] == "tool"
+        assert result["content"].startswith(
+            "↳ from your diary, beings/bract.md:\n# bract\n\nthe hedge-keeper. 🦋"
+        )
+        assert (
+            "1 page open" in result["content"] and "on your desk" in result["content"]
+        )
+        # the open is a row in her record
+        rows["opens"].assert_called_once()
+        assert rows["opens"].call_args.args[1:] == ("beings/bract.md", True)
+        assert rows["opens"].call_args.kwargs["chars"] == len(
+            "# bract\n\nthe hedge-keeper. 🦋\n"
+        )
+        assert rows["opens"].call_args.kwargs["open_pages"] == 1
+        # and the reply's row says what her hands did first
+        meta = rows["messages"].call_args.kwargs
+        assert meta["calls"] == 1
+        assert meta["opened"] == ["beings/bract.md"]
+        assert meta["mutters"] == 0
+        history = faebot.conversations[conversation_id]["conversation"]
+        assert history[-1].endswith("] faebot: bract keeps the hedge 🦋")
+
+    @pytest.mark.asyncio
+    async def test_a_page_not_in_her_diary_is_said_not_guessed(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(calls=[self._call("open", path="beings/nobody")]),
+                self._answer("no page for them yet"),
+            ],
+        )
+        result = prompts[1].turns[1]["content"]
+        assert result == (
+            "that page isn't in your diary: beings/nobody — the roster lists what is"
+        )
+        assert rows["opens"].call_args.args[1:] == ("beings/nobody", False)
+        mock_message.channel.send.assert_called_once_with("no page for them yet")
+
+    @pytest.mark.asyncio
+    async def test_a_page_opened_twice_is_said_to_be_open_already(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[
+                        self._call("open", path="beings/bract.md"),
+                        self._call("open", path="beings/bract", extra="x"),
+                    ]
+                ),
+                self._answer("once was enough"),
+            ],
+        )
+        results = [
+            turn["content"] for turn in prompts[1].turns if turn["role"] == "tool"
+        ]
+        assert results[0].startswith("↳ from your diary, beings/bract.md:")
+        assert results[1] == "beings/bract.md is already open in front of you"
+        assert rows["opens"].call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_the_pass_verb_posts_nothing_and_keeps_her_why(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [self._answer(calls=[self._call("pass", why="they're mid-thought")])],
+        )
+        mock_message.channel.send.assert_not_called()
+        history = faebot.conversations[conversation_id]["conversation"]
+        assert history == ["[2024-01-01 12:00:00] (faebot was here and chose quiet)"]
+        rows["passes"].assert_called_once()
+        assert rows["passes"].call_args.args[1] == "they're mid-thought"
+        assert rows["passes"].call_args.kwargs["via"] == "verb"
+        assert "empty_ending" not in rows["passes"].call_args.kwargs
+        faebot.fdb.save_conversation.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_the_pass_verb_owes_no_why(self, faebot, mock_message):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [self._answer(calls=[self._call("pass")])],
+        )
+        mock_message.channel.send.assert_not_called()
+        assert rows["passes"].call_args.args[1] == ""
+        assert rows["passes"].call_args.kwargs["via"] == "verb"
+
+    @pytest.mark.asyncio
+    async def test_words_beside_a_call_are_a_mutter_kept_and_never_posted(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    "let me look at bract first",
+                    calls=[self._call("open", path="beings/bract")],
+                ),
+                self._answer("bract keeps the hedge"),
+            ],
+        )
+        mock_message.channel.send.assert_called_once_with("bract keeps the hedge")
+        rows["mutters"].assert_called_once()
+        assert rows["mutters"].call_args.args[1] == "let me look at bract first"
+        assert rows["mutters"].call_args.kwargs["sentinel_beside_call"] is False
+        assert rows["messages"].call_args.kwargs["mutters"] == 1
+        # the mutter went back to her on the wire as her own message, whole
+        assert prompts[1].turns[0]["content"] == "let me look at bract first"
+        history = faebot.conversations[conversation_id]["conversation"]
+        assert all("let me look" not in line for line in history)
+
+    @pytest.mark.asyncio
+    async def test_the_empty_ending_is_her_pass_and_is_counted(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(calls=[self._call("open", path="beings/bract")]),
+                self._answer(""),
+            ],
+        )
+        mock_message.channel.send.assert_not_called()
+        history = faebot.conversations[conversation_id]["conversation"]
+        assert history == ["[2024-01-01 12:00:00] (faebot was here and chose quiet)"]
+        rows["passes"].assert_called_once()
+        assert rows["passes"].call_args.args[1] == ""
+        assert rows["passes"].call_args.kwargs["via"] == "empty"
+        assert rows["passes"].call_args.kwargs["empty_ending"] is True
+        assert rows["passes"].call_args.kwargs["opened"] == ["beings/bract.md"]
+        rows["errors"].assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_empty_answer_on_a_fresh_desk_is_still_a_drop(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot, mock_message, conversation_id, [self._answer("")]
+        )
+        mock_message.channel.send.assert_not_called()
+        rows["passes"].assert_not_called()
+        rows["errors"].assert_called_once()
+        assert (
+            rows["errors"].call_args.args[1] == "empty answer channel after every roll"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_sentinel_said_as_words_is_still_caught_and_counted(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot, mock_message, conversation_id, [self._answer("NOTHING-TO-SAY busy")]
+        )
+        mock_message.channel.send.assert_not_called()
+        assert rows["passes"].call_args.args[1] == "busy"
+        assert rows["passes"].call_args.kwargs["via"] == "sentinel"
+
+    @pytest.mark.asyncio
+    async def test_a_cut_answer_runs_no_call_and_she_is_told(
+        self, faebot, mock_message
+    ):
+        from faebot_core.cognition.verbs import CUT_RESULT
+
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[self._call("open", path="beings/bract")],
+                    finish_reason="length",
+                ),
+                self._answer("again, whole"),
+            ],
+        )
+        rows["opens"].assert_not_called()
+        assert prompts[1].turns[1]["content"] == CUT_RESULT
+        mock_message.channel.send.assert_called_once_with("again, whole")
+
+    @pytest.mark.asyncio
+    async def test_the_desk_stops_at_the_call_budget_and_leaves_only_pass(
+        self, faebot, mock_message
+    ):
+        import desk_verbs
+        from faebot_core.cognition.verbs import MAX_CALLS_PER_TURN
+
+        conversation_id = self._room(faebot, mock_message)
+        answers = [
+            self._answer(calls=[self._call("open", path="beings/bract")])
+            for _ in range(MAX_CALLS_PER_TURN)
+        ] + [self._answer("fine, then")]
+        prompts, rows = await self._drive(
+            faebot, mock_message, conversation_id, answers
+        )
+        mock_message.channel.send.assert_called_once_with("fine, then")
+        last = prompts[-1]
+        assert last.tools == desk_verbs.PASS_ONLY
+        assert all(prompt.tools == desk_verbs.TOOLS for prompt in prompts[:-1])
+        note = last.turns[-1]
+        assert note["role"] == "user"
+        assert note["content"].startswith(
+            f"[the machinery] {MAX_CALLS_PER_TURN} calls this turn — the desk stops here."
+        )
+        assert rows["messages"].call_args.kwargs["calls"] == MAX_CALLS_PER_TURN
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_will_not_end_is_the_machinerys_failure_not_her_quiet(
+        self, faebot, mock_message
+    ):
+        from faebot_core.cognition.verbs import MAX_CALLS_PER_TURN
+
+        conversation_id = self._room(faebot, mock_message)
+        answers = [
+            self._answer(calls=[self._call("open", path="beings/bract")])
+            for _ in range(MAX_CALLS_PER_TURN + 1)
+        ]
+        prompts, rows = await self._drive(
+            faebot, mock_message, conversation_id, answers
+        )
+        mock_message.channel.send.assert_not_called()
+        rows["passes"].assert_not_called()
+        rows["errors"].assert_called_once()
+        assert (
+            rows["errors"]
+            .call_args.args[1]
+            .startswith(f"the turn did not end within {MAX_CALLS_PER_TURN} calls")
+        )
+        assert len(prompts) == MAX_CALLS_PER_TURN + 1
+
+    @pytest.mark.asyncio
+    async def test_after_the_budget_her_pass_is_honored_even_with_company(
+        self, faebot, mock_message
+    ):
+        from faebot_core.cognition.verbs import MAX_CALLS_PER_TURN
+        import desk_verbs
+
+        conversation_id = self._room(faebot, mock_message)
+        answers = [
+            self._answer(calls=[self._call("open", path="beings/bract")])
+            for _ in range(MAX_CALLS_PER_TURN)
+        ] + [
+            self._answer(
+                calls=[
+                    self._call("open", path="beings/bract", again="yes"),
+                    self._call("pass", why="enough looking"),
+                ]
+            )
+        ]
+        prompts, rows = await self._drive(
+            faebot, mock_message, conversation_id, answers
+        )
+        mock_message.channel.send.assert_not_called()
+        rows["errors"].assert_not_called()
+        rows["passes"].assert_called_once()
+        assert rows["passes"].call_args.args[1] == "enough looking"
+        assert rows["passes"].call_args.kwargs["via"] == "verb"
+        # the open beside it was not run: only pass was on offer (the first
+        # open recorded the page; the rest were told it was open already)
+        assert rows["opens"].call_count == 1
+        assert prompts[-1].tools == desk_verbs.PASS_ONLY
+
+    @pytest.mark.asyncio
+    async def test_the_old_sentinel_beside_a_call_is_a_mutter_and_counted(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    "NOTHING-TO-SAY", calls=[self._call("open", path="beings/bract")]
+                ),
+                self._answer(calls=[self._call("pass")]),
+            ],
+        )
+        mock_message.channel.send.assert_not_called()
+        rows["mutters"].assert_called_once()
+        assert rows["mutters"].call_args.kwargs["sentinel_beside_call"] is True
+        assert rows["passes"].call_args.kwargs["via"] == "verb"
+
+    @pytest.mark.asyncio
+    async def test_open_then_pass_in_one_answer_opens_and_then_keeps_quiet(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[
+                        self._call("open", path="beings/bract"),
+                        self._call("pass", why="bract has it in hand"),
+                    ]
+                )
+            ],
+        )
+        mock_message.channel.send.assert_not_called()
+        rows["opens"].assert_called_once()
+        assert rows["passes"].call_args.args[1] == "bract has it in hand"
+        assert rows["passes"].call_args.kwargs["opened"] == ["beings/bract.md"]

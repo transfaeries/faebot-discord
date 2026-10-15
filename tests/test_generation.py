@@ -392,3 +392,115 @@ class TestGenerate:
         assert completion.text == "local"
         assert "reasoning" not in session.calls[0]
         assert session.calls[0]["max_length"] == generation.GENERATION_CAP
+
+
+# --- the turn on the wire (cut 2) ---------------------------------------------
+
+
+def a_call(name, arguments="{}"):
+    return {
+        "id": f"call_{name}",
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+
+
+def openrouter_calls(calls, content="", reasoning="r"):
+    return FakeResponse(
+        body={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                        "reasoning": reasoning,
+                        "reasoning_details": [
+                            {"type": "reasoning.text", "text": reasoning}
+                        ],
+                        "tool_calls": list(calls),
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "model": "moonshotai/kimi-k3",
+            "provider": "Moonshot",
+            "usage": {},
+        }
+    )
+
+
+class TestTheTurnOnTheWire:
+    def test_the_desk_offers_her_verbs_and_the_turn_grows_behind_it(self):
+        tools = ({"type": "function", "function": {"name": "open"}},)
+        prompt = generation.Prompt(system="frame", user="furniture", tools=tools)
+        _, _, payload = generation._request(prompt, "m", {"temperature": 1, "top_p": 1})
+        assert payload["tools"] == list(tools)
+        assert payload["messages"] == [
+            {"role": "system", "content": "frame"},
+            {"role": "user", "content": "furniture"},
+        ]
+        grown = prompt.after(
+            {"role": "assistant", "content": "", "tool_calls": [a_call("open")]},
+            {"role": "tool", "tool_call_id": "call_open", "content": "a page"},
+        )
+        assert grown.text == prompt.text  # the desk never moves
+        assert grown.messages()[2:] == list(grown.turns)
+        _, _, payload = generation._request(grown, "m", {"temperature": 1, "top_p": 1})
+        assert len(payload["messages"]) == 4
+        only_pass = grown.offering(
+            ({"type": "function", "function": {"name": "pass"}},)
+        )
+        assert only_pass.turns == grown.turns
+        assert only_pass.tools[0]["function"]["name"] == "pass"
+
+    def test_a_desk_with_no_verbs_sends_no_tools_key(self):
+        prompt = generation.Prompt(system="frame", user="furniture")
+        _, _, payload = generation._request(prompt, "m", {"temperature": 1, "top_p": 1})
+        assert "tools" not in payload
+
+    @pytest.mark.asyncio
+    async def test_an_answer_with_calls_is_parsed_whole_and_is_not_empty(self):
+        session = FakeSession(
+            [openrouter_calls([a_call("open", '{"path": "beings/bract.md"}')])]
+        )
+        completion = await generation.generate(session, "p", "m")
+        assert completion.text == ""
+        assert not completion.is_empty
+        assert not completion.passed
+        [call] = completion.calls
+        assert call.verb == "open" and call.arguments == {"path": "beings/bract.md"}
+        # the model's own message, kept whole for the next call of the turn
+        assert completion.message["tool_calls"][0]["id"] == "call_open"
+        assert completion.message["reasoning_details"][0]["text"] == "r"
+        assert completion.finish_reason == "tool_calls"
+        assert completion.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_the_sentinel_beside_a_call_is_not_a_pass(self):
+        session = FakeSession(
+            [openrouter_calls([a_call("open")], content="NOTHING-TO-SAY yet")]
+        )
+        completion = await generation.generate(session, "p", "m")
+        assert not completion.passed
+        assert completion.calls
+
+    @pytest.mark.asyncio
+    async def test_an_empty_answer_after_she_has_acted_is_not_rolled_again(self):
+        prompt = generation.Prompt(system="f", user="u").after(
+            {"role": "assistant", "content": "", "tool_calls": [a_call("open")]},
+            {"role": "tool", "tool_call_id": "call_open", "content": "a page"},
+        )
+        session = FakeSession(
+            [openrouter("", reasoning="…"), openrouter("not reached")]
+        )
+        completion = await generation.generate(session, prompt, "m")
+        assert completion.is_empty
+        assert completion.attempts == 1
+        assert len(session.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_text_shaped_answer_still_carries_a_message(self):
+        session = FakeSession([openrouter("there")])
+        completion = await generation.generate(session, "p", "m")
+        assert completion.message["content"] == "there"
+        assert completion.calls == []
