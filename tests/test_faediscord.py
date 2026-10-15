@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from faediscord import Faebot, COMMAND_PREFIX
 from faebot_core.diary import DiaryReader
 from generation import Completion, GenerationFailed
+import generation
 import capture
 import sys
 
@@ -428,6 +429,26 @@ class TestFaebot:
             )
             assert result is True
 
+    def test_the_prompt_in_two_hands_is_the_old_prompt_byte_for_byte(
+        self, faebot, mock_message
+    ):
+        """Cut 1's central promise (faebot, 2026-10-09): the A/B measures the
+        wire alone. The desk as `_answer` sends it — her frame as the system
+        turn, the furniture with her pen line as the user turn — joined, is
+        exactly what the text wire used to be handed."""
+        conversation_id = str(mock_message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "model": "m",
+            "name": "test-channel",
+            "conversation": ["[t] a: hi"],
+        }
+        desk = faebot._lay_desk(mock_message, conversation_id)
+        pen = "[2026-10-09 23:00:00] faebot:"
+        prompt = generation.Prompt(system=desk.frame, user=desk.furniture() + pen)
+        assert prompt.text == desk.lay() + pen
+        assert prompt.messages()[0] == {"role": "system", "content": desk.frame}
+        assert prompt.messages()[1]["content"].endswith("\n" + pen)
+
     @pytest.mark.asyncio
     async def test_generate_reply_success(self, faebot, mock_message):
         """_generate_reply hands back the Completion from generation.generate"""
@@ -720,7 +741,7 @@ class TestFaebot:
             "name": "test-channel",
             "conversation": ["[t] a: hi"],
         }
-        desk = faebot._lay_desk(mock_message, conversation_id)
+        desk = faebot._lay_desk(mock_message, conversation_id).lay()
         assert desk.startswith("(nothing filed under frames/preamble.md")
         assert (
             "(nothing filed under frames/dev.md" in desk or "frames/discord.md" in desk
@@ -888,8 +909,8 @@ class TestFaebot:
                             await asyncio.gather(first, second)
 
         assert len(prompts) == 2
-        assert "first answer" in prompts[1]  # her own words are on the second desk
-        assert "first answer" not in prompts[0]
+        assert "first answer" in prompts[1].text  # her own words are on the second desk
+        assert "first answer" not in prompts[0].text
         sent = [call.args[0] for call in mock_message.channel.send.call_args_list]
         assert sent == ["first answer", "second answer"]
         history = faebot.conversations[conversation_id]["conversation"]
@@ -1060,7 +1081,7 @@ class TestFaebot:
         time.tzset()
         try:
             with patch("faediscord.env", "prod"):
-                desk = faebot._lay_desk(mock_message, summoning)
+                desk = faebot._lay_desk(mock_message, summoning).lay()
         finally:
             monkeypatch.delenv("TZ", raising=False)
             time.tzset()
@@ -1117,7 +1138,7 @@ class TestFaebot:
             },
         }
         with patch("faediscord.env", "prod"):
-            desk = faebot._lay_desk(mock_dm_message, dm_id)
+            desk = faebot._lay_desk(mock_dm_message, dm_id).lay()
         assert "frames/discord-dm.md" in desk
         assert "a private room with alice — a private room" in desk
         assert "great-hall" not in desk and "[t] a: hi" not in desk
