@@ -93,15 +93,27 @@ PASS = Verb(
     },
 )
 
+# A body with its pen; a body handed only a reader offers no pen at all —
+# the wire says what the hands can do, and never a verb that can't land.
 VERBS = (OPEN, APPEND, WRITE, PASS)
+READING = (OPEN, PASS)
 TOOLS = tuple(definitions(VERBS))
+READING_TOOLS = tuple(definitions(READING))
 # Once the desk's call budget is spent, only the exit stays on offer.
 PASS_ONLY = tuple(definitions((PASS,)))
 
 
+def offered(*, has_pen: bool) -> tuple[tuple[Verb, ...], tuple[dict, ...]]:
+    """The verbs this body puts on the wire, and their tool definitions."""
+    return (VERBS, TOOLS) if has_pen else (READING, READING_TOOLS)
+
+
 def may_append(rel: str) -> bool:
-    """A page this body's pen may add to: the commons, or a notes/ page."""
-    return rel == COMMONS or rel.startswith(APPENDABLE)
+    """A page this body's pen may add to: the commons, or a notes/ page. A
+    stem with `..` in it is refused on principle — the path rule already
+    keeps a second slash out, so nothing escapes today; this guards the day
+    something under it changes."""
+    return (rel == COMMONS or rel.startswith(APPENDABLE)) and ".." not in rel
 
 
 def may_found(rel: str) -> bool:
@@ -114,10 +126,13 @@ def hand_for(room: str | None, *, dm: bool = False, why: str = "") -> Hand:
     the room (a DM is stamped as the kind, never the person), on her own
     word — the floor records what it is told. The discipline the floor can't
     hold — no row without a body and a room — lives here, where the hand is."""
-    where = "dm" if dm or not room else f"#{room}"
+    # a DM is the kind, never the person; a room with no name is said as
+    # unknown, never mistaken for a DM — the trace is an evidence layer
+    where = "dm" if dm else (f"#{room}" if room else "unknown")
+    said = {"dm": "in a DM", "unknown": "in an unnamed room"}.get(where, f"in {where}")
     return Hand(
         "body-write",
-        f"by faebot's discord body {'in a DM' if where == 'dm' else 'in ' + where}",
+        f"by faebot's discord body {said}",
         "faebot",
         {"body": "discord", "room": where},
         why.strip(),

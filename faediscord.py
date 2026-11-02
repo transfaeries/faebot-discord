@@ -88,7 +88,7 @@ class Turn:
     calls: int = 0
     opened: Dict[str, str] = field(default_factory=dict)
     mutters: List[str] = field(default_factory=list)
-    written: Dict[str, str] = field(default_factory=dict)  # page -> verb
+    written: List[Tuple[str, str]] = field(default_factory=list)  # (page, verb)
     passed: bool = False
     why: str = ""
     elapsed: float = 0.0
@@ -109,6 +109,11 @@ class Faebot(discord.Client):
         # in by a test is a body without a pen; the real body opens the
         # writing door. Required — a body without its diary has no frame.
         self.diary = diary if diary is not None else Diary.from_environment()
+        # The verbs on her wire: with a pen, the four; handed a reader, the
+        # two that read — a body never advertises a hand it doesn't have.
+        self.verbs, self.tools = desk_verbs.offered(
+            has_pen=isinstance(self.diary, Diary)
+        )
         # When each room last heard a message (monotonic seconds), so the
         # freshest rooms are the ones in earshot.
         self.last_heard: Dict[str, float] = {}
@@ -1157,7 +1162,7 @@ class Faebot(discord.Client):
         prompt = generation.Prompt(
             system=desk.frame,
             user=desk.furniture() + f"[{current_time}] {self.user.display_name}:",
-            tools=desk_verbs.TOOLS,
+            tools=self.tools,
         )
 
         # The typing indicator runs while faebot thinks — including when the
@@ -1201,7 +1206,7 @@ class Faebot(discord.Client):
             meta["calls"] = turn.calls
             meta["opened"] = list(turn.opened)
             meta["mutters"] = len(turn.mutters)
-            meta["written"] = list(turn.written)
+            meta["written"] = [page for page, _ in turn.written]
             meta["turn_elapsed"] = round(turn.elapsed, 1)
 
         # Her quiet, three ways, one mark. The pass verb (her ruling: a why
@@ -1360,7 +1365,7 @@ class Faebot(discord.Client):
         failed (logged and captured by `_generate_reply`)."""
         opened: Dict[str, str] = {}
         mutters: List[str] = []
-        written: Dict[str, str] = {}
+        written: List[Tuple[str, str]] = []
         calls_made = 0
         elapsed = 0.0
         budget_said = False
@@ -1445,7 +1450,7 @@ class Faebot(discord.Client):
             results = []
             # after the budget only pass is on offer, so only pass runs — a
             # pass that arrives with company is honored and the company told
-            on_offer = (desk_verbs.PASS,) if budget_said else desk_verbs.VERBS
+            on_offer = (desk_verbs.PASS,) if budget_said else self.verbs
             if budget_said and len(calls) > 1:
                 logging.info(
                     f"faebot passed with {len(calls) - 1} other call(s) beside it after "
@@ -1498,7 +1503,7 @@ class Faebot(discord.Client):
         body: str,
         verb: str,
         why: str,
-        written: Dict[str, str],
+        written: List[Tuple[str, str]],
         message,
         conversation_id,
     ) -> str:
@@ -1531,14 +1536,32 @@ class Faebot(discord.Client):
                 verb,
                 False,
                 reason="dirty tree",
+                chars=len(body),
                 conversation_id=conversation_id,
             )
             return (
                 "not written — your diary has an unfinished change on disk, and "
-                "nothing lands on top of one; the keeper will sort it. Your text is "
-                "in your record, not lost."
+                "nothing lands on top of one. Nothing was changed."
             )
-        written[rel] = verb
+        except Exception as error:
+            # a fault under the floor (git, the disk, a misdeployed identity)
+            # still ends in a word to her and a row in her record — never a
+            # turn that dies with nothing said
+            logging.exception(f"faebot's {verb} of {rel} did not land")
+            capture.record_faebot_write(
+                message.channel,
+                rel,
+                verb,
+                False,
+                reason=f"land failed: {type(error).__name__}",
+                chars=len(body),
+                conversation_id=conversation_id,
+            )
+            return (
+                "not written — the write did not land; the machinery stumbled and "
+                "nothing was changed. Try again later, or leave it."
+            )
+        written.append((rel, verb))
         logging.info(f"faebot {verb} {rel} — diary {sha[:7]}")
         capture.record_faebot_write(
             message.channel,
@@ -1580,7 +1603,7 @@ class Faebot(discord.Client):
         path: str,
         lines: str,
         why: str,
-        written: Dict[str, str],
+        written: List[Tuple[str, str]],
         message,
         conversation_id,
     ) -> str:
@@ -1635,7 +1658,7 @@ class Faebot(discord.Client):
         path: str,
         text: str,
         why: str,
-        written: Dict[str, str],
+        written: List[Tuple[str, str]],
         message,
         conversation_id,
     ) -> str:

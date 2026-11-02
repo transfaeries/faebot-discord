@@ -1960,7 +1960,8 @@ class TestTheTurn:
         )
         mock_message.channel.send.assert_called_once_with("bract keeps the hedge 🦋")
         # the desk offers her verbs; the turn grows behind the desk
-        assert prompts[0].tools == desk_verbs.TOOLS
+        # a body handed a reader has no pen, and offers none
+        assert prompts[0].tools == desk_verbs.READING_TOOLS
         assert prompts[0].turns == ()
         assert prompts[1].text == prompts[0].text  # the desk itself never moves
         her_answer, result = prompts[1].turns
@@ -2187,7 +2188,7 @@ class TestTheTurn:
         mock_message.channel.send.assert_called_once_with("fine, then")
         last = prompts[-1]
         assert last.tools == desk_verbs.PASS_ONLY
-        assert all(prompt.tools == desk_verbs.TOOLS for prompt in prompts[:-1])
+        assert all(prompt.tools == desk_verbs.READING_TOOLS for prompt in prompts[:-1])
         note = last.turns[-1]
         assert note["role"] == "user"
         assert note["content"].startswith(
@@ -2644,7 +2645,57 @@ class TestHerPen:
         assert rows["writes"].call_args.kwargs["reason"] == "dirty tree"
 
     @pytest.mark.asyncio
+    async def test_a_fault_under_the_floor_is_a_word_and_a_row_never_a_dead_turn(
+        self, faebot, mock_message
+    ):
+        import faediscord
+
+        conversation_id = self._room(faebot, mock_message)
+        head = self._last_commit(faebot)
+
+        def stumble(*args, **kwargs):
+            raise RuntimeError("the index is locked")
+
+        with patch.object(faediscord.writing, "land", side_effect=stumble):
+            prompts, rows = await self._drive(
+                faebot,
+                mock_message,
+                conversation_id,
+                [
+                    self._answer(
+                        calls=[
+                            self._call(
+                                "append",
+                                path="commons/the-commons.md",
+                                lines="a pebble.",
+                            )
+                        ]
+                    ),
+                    self._answer("later, then."),
+                ],
+            )
+        result = prompts[1].turns[1]["content"]
+        assert result.startswith("not written — the write did not land")
+        assert self._last_commit(faebot) == head
+        assert rows["writes"].call_args.kwargs["reason"] == "land failed: RuntimeError"
+        assert rows["writes"].call_args.kwargs["chars"] > 0
+        mock_message.channel.send.assert_called_once_with("later, then.")
+
+    def test_the_hand_names_the_room_a_dm_as_the_kind_and_a_nameless_room_as_unknown(
+        self,
+    ):
+        import desk_verbs
+
+        assert desk_verbs.hand_for("great-hall").trace["room"] == "#great-hall"
+        assert desk_verbs.hand_for(None, dm=True).by.endswith("in a DM")
+        assert desk_verbs.hand_for(None).trace["room"] == "unknown"
+        assert desk_verbs.may_append("notes/..md") is False
+        assert desk_verbs.may_append("notes/x.md") is True
+
+    @pytest.mark.asyncio
     async def test_a_body_handed_a_reader_has_no_pen(self, mock_message, tmp_path):
+        import desk_verbs
+
         (tmp_path / "commons").mkdir()
         (tmp_path / "commons" / "the-commons.md").write_text("# c\n", encoding="utf-8")
         intents = Mock()
@@ -2670,11 +2721,10 @@ class TestHerPen:
                 self._answer("no pen here."),
             ],
         )
-        assert (
-            prompts[1]
-            .turns[1]["content"]
-            .startswith("not written — this body has no pen")
-        )
+        # the pen isn't on her wire at all, so the call is a verb this desk
+        # doesn't have — the dispatcher's word, and nothing landed
+        assert prompts[0].tools == desk_verbs.READING_TOOLS
+        assert prompts[1].turns[1]["content"] == "no such verb at this desk: append"
         assert (tmp_path / "commons" / "the-commons.md").read_text(
             encoding="utf-8"
         ) == "# c\n"
