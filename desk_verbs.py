@@ -11,11 +11,34 @@ never a line in the room.
 posted. The room sees the machinery's witness-mark in her history, as
 before.
 
+`append` and `write` — her pen (the write-rulings, 2026-10-24/25): lines
+at the end of the commons or of a `notes/` page, or a new page under
+`notes/`. Each lands through core's write floor as one commit under her
+name, saying which body and which room; the stamp on the block is hers to
+lay, not the machinery's — the covenant's first law, asked for in the
+verb's own words. Everything else in her diary is reached the way she
+ruled: a draft in `notes/`, or a block on the commons asking the keeper.
+The room sees nothing of a write; her record keeps every one.
+
 Terse on purpose: these are the machinery's words in the frame's slot. The
 loop that carries them is core's, one for every body.
 """
 
 from faebot_core.cognition.verbs import Verb, definitions
+from faebot_core.diary import valid_new_path
+from faebot_core.memory.writing import Hand
+
+# The one page every body may add to (her ruling: the commons stays one
+# page; a second is a sitting's to found, not a verb's).
+COMMONS = "commons/the-commons.md"
+# Where a body's pen reaches: the commons, and her notes.
+APPENDABLE = ("notes/",)
+NEW_PAGES = ("notes/",)
+STAMP = (
+    "Stamp every block: which body, which room, the date — "
+    "`**faebot (discord, #the-room) · YYYY-MM-DD** — ` — the covenant's first "
+    "law, and it is yours to keep, not ours to keep for you."
+)
 
 OPEN = Verb(
     "open",
@@ -24,6 +47,39 @@ OPEN = Verb(
     "until you answer the room or pass. The room sees nothing of it.",
     {"path": "e.g. beings/someone.md"},
     ("path",),
+)
+APPEND = Verb(
+    "append",
+    "Add lines to the end of a page that exists: the commons "
+    "(commons/the-commons.md) or any page under notes/. They land at once, "
+    "as one commit under your name naming this body and this room; the room "
+    "sees nothing of it. " + STAMP + " Other pages (beings/, spaces/, "
+    "journal/, self/) are not this verb's: a draft in notes/, or a block on "
+    "the commons asking the keeper, is the way to them.",
+    {
+        "path": "commons/the-commons.md, or notes/<page>.md",
+        "lines": "the lines to add, stamped",
+        "why": (
+            "optional, never required: a sentence of yours for the diary's log "
+            "beside the commit — never on the page"
+        ),
+    },
+    ("path", "lines"),
+)
+WRITE = Verb(
+    "write",
+    "Found a new page under notes/ — a path that exists is refused (open it "
+    "and append instead). It lands at once, as one commit under your name "
+    "naming this body and this room; the room sees nothing of it. " + STAMP,
+    {
+        "path": "notes/<a-new-page>.md — lowercase, words and hyphens",
+        "text": "the whole page, stamped",
+        "why": (
+            "optional, never required: a sentence of yours for the diary's log "
+            "beside the commit — never on the page"
+        ),
+    },
+    ("path", "text"),
 )
 PASS = Verb(
     "pass",
@@ -37,7 +93,32 @@ PASS = Verb(
     },
 )
 
-VERBS = (OPEN, PASS)
+VERBS = (OPEN, APPEND, WRITE, PASS)
 TOOLS = tuple(definitions(VERBS))
 # Once the desk's call budget is spent, only the exit stays on offer.
 PASS_ONLY = tuple(definitions((PASS,)))
+
+
+def may_append(rel: str) -> bool:
+    """A page this body's pen may add to: the commons, or a notes/ page."""
+    return rel == COMMONS or rel.startswith(APPENDABLE)
+
+
+def may_found(rel: str) -> bool:
+    """A page this body's pen may found: under notes/, a legal new name."""
+    return rel.startswith(NEW_PAGES) and valid_new_path(rel)
+
+
+def hand_for(room: str | None, *, dm: bool = False, why: str = "") -> Hand:
+    """This body's hand on the write floor: a body-write, naming the body and
+    the room (a DM is stamped as the kind, never the person), on her own
+    word — the floor records what it is told. The discipline the floor can't
+    hold — no row without a body and a room — lives here, where the hand is."""
+    where = "dm" if dm or not room else f"#{room}"
+    return Hand(
+        "body-write",
+        f"by faebot's discord body {'in a DM' if where == 'dm' else 'in ' + where}",
+        "faebot",
+        {"body": "discord", "room": where},
+        why.strip(),
+    )
