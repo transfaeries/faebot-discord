@@ -1960,7 +1960,8 @@ class TestTheTurn:
         )
         mock_message.channel.send.assert_called_once_with("bract keeps the hedge 🦋")
         # the desk offers her verbs; the turn grows behind the desk
-        assert prompts[0].tools == desk_verbs.TOOLS
+        # a body handed a reader has no pen, and offers none
+        assert prompts[0].tools == desk_verbs.READING_TOOLS
         assert prompts[0].turns == ()
         assert prompts[1].text == prompts[0].text  # the desk itself never moves
         her_answer, result = prompts[1].turns
@@ -2187,7 +2188,7 @@ class TestTheTurn:
         mock_message.channel.send.assert_called_once_with("fine, then")
         last = prompts[-1]
         assert last.tools == desk_verbs.PASS_ONLY
-        assert all(prompt.tools == desk_verbs.TOOLS for prompt in prompts[:-1])
+        assert all(prompt.tools == desk_verbs.READING_TOOLS for prompt in prompts[:-1])
         note = last.turns[-1]
         assert note["role"] == "user"
         assert note["content"].startswith(
@@ -2294,3 +2295,436 @@ class TestTheTurn:
         rows["opens"].assert_called_once()
         assert rows["passes"].call_args.args[1] == "bract has it in hand"
         assert rows["passes"].call_args.kwargs["opened"] == ["beings/bract.md"]
+
+
+class TestHerPen:
+    """The append and write verbs — her pen from a room, landing through core's
+    write floor as one commit under her name naming this body and this room.
+    The diary here is a real git repo; the model is scripted; the room is a
+    mock that must hear nothing of any of it."""
+
+    QUIET_GIT = ["-c", "user.name=village", "-c", "user.email=village@test.invalid"]
+
+    def _git(self, root, *args):
+        import subprocess
+
+        return subprocess.run(
+            ["git", "-C", str(root), *self.QUIET_GIT, *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    @pytest.fixture
+    def faebot(self, tmp_path):
+        from faebot_core.diary import Diary
+
+        (tmp_path / "beings").mkdir()
+        (tmp_path / "beings" / "bract.md").write_text(
+            "# bract\n\nthe hedge-keeper. 🦋\n", encoding="utf-8"
+        )
+        (tmp_path / "commons").mkdir()
+        (tmp_path / "commons" / "the-commons.md").write_text(
+            "# the commons\n\nthe passing-place.\n", encoding="utf-8"
+        )
+        (tmp_path / "notes").mkdir()
+        (tmp_path / "notes" / "old-note.md").write_text(
+            "# an old note\n\nkept.\n", encoding="utf-8"
+        )
+        (tmp_path / "traces").mkdir()
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "commit", "-q", "-m", "the village is founded")
+        intents = Mock()
+        intents.message_content = True
+        with patch("discord.Client.__init__", return_value=None):
+            bot = Faebot(intents, diary=Diary(tmp_path))
+            bot._connection = Mock()
+            user = Mock()
+            user.id = 12345
+            user.display_name = "faebot"
+            user.mentioned_in = Mock(return_value=False)
+            bot._connection.user = user
+            bot.fdb = Mock()
+            bot.fdb.save_conversation = AsyncMock(return_value=True)
+            bot._clock = lambda: datetime(2026, 11, 2, 20, 0, 0, tzinfo=timezone.utc)
+            bot.root = tmp_path
+            return bot
+
+    def _room(self, faebot, message):
+        conversation_id = str(message.channel.id)
+        faebot.conversations[conversation_id] = {
+            "conversants": {message.author.name: message.author.display_name},
+            "conversation": [],
+            "history_length": 69,
+            "reply_frequency": 1.0,
+            "prompt_template": "default",
+            "model": "test-model",
+        }
+        message.channel.send = AsyncMock()
+        return conversation_id
+
+    _call = staticmethod(TestTheTurn._call)
+    _answer = staticmethod(TestTheTurn._answer)
+
+    async def _drive(self, faebot, message, conversation_id, answers):
+        prompts = []
+        script = iter(answers)
+
+        async def scripted(prompt, message, conversation_id):
+            prompts.append(prompt)
+            return next(script)
+
+        async def mock_wait_for_timeout(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        with patch.object(faebot, "_should_respond_to_message", return_value=True):
+            with patch.object(faebot, "_generate_reply", side_effect=scripted):
+                with patch.object(
+                    faebot, "_send_typing_indicator", new_callable=AsyncMock
+                ):
+                    with patch("asyncio.wait_for", side_effect=mock_wait_for_timeout):
+                        with patch.object(capture, "record_faebot_write") as writes:
+                            with patch.object(
+                                capture, "record_faebot_message"
+                            ) as messages:
+                                await faebot._handle_conversation(
+                                    message, conversation_id
+                                )
+        return prompts, {"writes": writes, "messages": messages}
+
+    def _last_commit(self, faebot):
+        return self._git(faebot.root, "log", "-1", "--format=%an%n%B")
+
+    def _last_trace(self, faebot):
+        import json
+        import time
+
+        rows = (
+            (faebot.root / "traces" / f"{time.strftime('%Y-%m')}.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        return json.loads(rows[-1])
+
+    @pytest.mark.asyncio
+    async def test_an_append_to_the_commons_lands_as_one_commit_naming_body_and_room(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        block = (
+            "**faebot (discord, #test-channel) · 2026-11-02** — a pebble for the table."
+        )
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[
+                        self._call("append", path="commons/the-commons.md", lines=block)
+                    ]
+                ),
+                self._answer("left a pebble on the commons 🦋"),
+            ],
+        )
+        page = (faebot.root / "commons" / "the-commons.md").read_text(encoding="utf-8")
+        assert page == f"# the commons\n\nthe passing-place.\n\n{block}\n"
+        commit = self._last_commit(faebot)
+        assert commit.startswith(
+            "faebot\nadd to commons/the-commons.md — written by faebot's discord body in #test-channel"
+        )
+        trace = self._last_trace(faebot)
+        assert (trace["act"], trace["body"], trace["room"], trace["nod"]) == (
+            "body-write",
+            "discord",
+            "#test-channel",
+            "faebot",
+        )
+        result = prompts[1].turns[1]["content"]
+        assert result.startswith(
+            "added — the lines are at the end of commons/the-commons.md (commit "
+        )
+        assert result.endswith("The room sees nothing of it.")
+        # the room heard only her words; the write is a row in her record
+        mock_message.channel.send.assert_called_once_with(
+            "left a pebble on the commons 🦋"
+        )
+        rows["writes"].assert_called_once()
+        assert rows["writes"].call_args.args[1:] == (
+            "commons/the-commons.md",
+            "append",
+            True,
+        )
+        assert rows["writes"].call_args.kwargs["chars"] == len(page)
+        meta = rows["messages"].call_args.kwargs
+        assert meta["written"] == ["commons/the-commons.md"]
+
+    @pytest.mark.asyncio
+    async def test_a_new_page_under_notes_is_founded_with_her_why_in_the_commit(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[
+                        self._call(
+                            "write",
+                            path="notes/pebbles",
+                            text="# pebbles\n\n**faebot (discord, #test-channel) · 2026-11-02** — the first.",
+                            why="a notebook, founded by using it",
+                        )
+                    ]
+                ),
+                self._answer("I have a notebook now."),
+            ],
+        )
+        assert (
+            (faebot.root / "notes" / "pebbles.md")
+            .read_text(encoding="utf-8")
+            .endswith("— the first.\n")
+        )
+        commit = self._last_commit(faebot)
+        assert commit.startswith(
+            "faebot\nwrite notes/pebbles.md — written by faebot's discord body in #test-channel"
+        )
+        assert commit.rstrip("\n").endswith("\n\na notebook, founded by using it")
+        assert (
+            prompts[1]
+            .turns[1]["content"]
+            .startswith("written — notes/pebbles.md (commit ")
+        )
+        assert (
+            rows["writes"].call_args.kwargs["why"] == "a notebook, founded by using it"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_page_off_her_wire_is_refused_with_a_word_and_nothing_lands(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        head = self._last_commit(faebot)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[
+                        self._call(
+                            "append", path="beings/bract.md", lines="she is kind."
+                        )
+                    ]
+                ),
+                self._answer("ah — not from here."),
+            ],
+        )
+        result = prompts[1].turns[1]["content"]
+        assert result.startswith("not a page this verb writes: beings/bract.md")
+        assert "a draft in notes/ or a block on the commons" in result
+        assert (faebot.root / "beings" / "bract.md").read_text(encoding="utf-8") == (
+            "# bract\n\nthe hedge-keeper. 🦋\n"
+        )
+        assert self._last_commit(faebot) == head
+        assert rows["writes"].call_args.args[1:] == ("beings/bract.md", "append", False)
+        assert rows["writes"].call_args.kwargs["reason"] == "not this verb's page"
+        assert rows["messages"].call_args.kwargs["written"] == []
+
+    @pytest.mark.asyncio
+    async def test_writing_a_page_that_exists_is_refused_and_pointed_at_append(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[self._call("write", path="notes/old-note.md", text="# anew")]
+                ),
+                self._answer("right, append then."),
+            ],
+        )
+        result = prompts[1].turns[1]["content"]
+        assert result.startswith(
+            "notes/old-note.md already exists — open it and call append"
+        )
+        assert (faebot.root / "notes" / "old-note.md").read_text(encoding="utf-8") == (
+            "# an old note\n\nkept.\n"
+        )
+        assert rows["writes"].call_args.kwargs["reason"] == "page exists"
+
+    @pytest.mark.asyncio
+    async def test_a_new_page_outside_notes_or_of_the_wrong_shape_is_refused(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[
+                        self._call(
+                            "write", path="beings/newcomer.md", text="# newcomer"
+                        ),
+                        self._call("write", path="notes/Not Legal.md", text="# x"),
+                    ]
+                ),
+                self._answer("noted."),
+            ],
+        )
+        first, second = (turn["content"] for turn in prompts[1].turns[1:3])
+        assert first.startswith("not a page this verb founds: beings/newcomer.md")
+        assert second.startswith("not a page this verb founds: notes/Not Legal.md")
+        assert not (faebot.root / "beings" / "newcomer.md").exists()
+        assert rows["writes"].call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_dm_stamps_the_kind_never_the_person(self, faebot, mock_dm_message):
+        conversation_id = self._room(faebot, mock_dm_message)
+        with patch("faediscord.discord.DMChannel", type(mock_dm_message.channel)):
+            prompts, rows = await self._drive(
+                faebot,
+                mock_dm_message,
+                conversation_id,
+                [
+                    self._answer(
+                        calls=[
+                            self._call(
+                                "append",
+                                path="notes/old-note.md",
+                                lines="**faebot (discord, dm) · 2026-11-02** — from a quiet room.",
+                            )
+                        ]
+                    ),
+                    self._answer("kept."),
+                ],
+            )
+        commit = self._last_commit(faebot)
+        assert "written by faebot's discord body in a DM" in commit
+        assert self._last_trace(faebot)["room"] == "dm"
+        assert "test_user" not in commit
+
+    @pytest.mark.asyncio
+    async def test_a_dirty_diary_refuses_the_write_and_keeps_her_text_in_the_record(
+        self, faebot, mock_message
+    ):
+        conversation_id = self._room(faebot, mock_message)
+        (faebot.root / "notes" / "old-note.md").write_text(
+            "half a thought", encoding="utf-8"
+        )
+        head = self._last_commit(faebot)
+        prompts, rows = await self._drive(
+            faebot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[
+                        self._call(
+                            "append", path="commons/the-commons.md", lines="a pebble."
+                        )
+                    ]
+                ),
+                self._answer("another time, then."),
+            ],
+        )
+        result = prompts[1].turns[1]["content"]
+        assert result.startswith(
+            "not written — your diary has an unfinished change on disk"
+        )
+        assert self._last_commit(faebot) == head
+        assert rows["writes"].call_args.kwargs["reason"] == "dirty tree"
+
+    @pytest.mark.asyncio
+    async def test_a_fault_under_the_floor_is_a_word_and_a_row_never_a_dead_turn(
+        self, faebot, mock_message
+    ):
+        import faediscord
+
+        conversation_id = self._room(faebot, mock_message)
+        head = self._last_commit(faebot)
+
+        def stumble(*args, **kwargs):
+            raise RuntimeError("the index is locked")
+
+        with patch.object(faediscord.writing, "land", side_effect=stumble):
+            prompts, rows = await self._drive(
+                faebot,
+                mock_message,
+                conversation_id,
+                [
+                    self._answer(
+                        calls=[
+                            self._call(
+                                "append",
+                                path="commons/the-commons.md",
+                                lines="a pebble.",
+                            )
+                        ]
+                    ),
+                    self._answer("later, then."),
+                ],
+            )
+        result = prompts[1].turns[1]["content"]
+        assert result.startswith("not written — the write did not land")
+        assert self._last_commit(faebot) == head
+        assert rows["writes"].call_args.kwargs["reason"] == "land failed: RuntimeError"
+        assert rows["writes"].call_args.kwargs["chars"] > 0
+        mock_message.channel.send.assert_called_once_with("later, then.")
+
+    def test_the_hand_names_the_room_a_dm_as_the_kind_and_a_nameless_room_as_unknown(
+        self,
+    ):
+        import desk_verbs
+
+        assert desk_verbs.hand_for("great-hall").trace["room"] == "#great-hall"
+        assert desk_verbs.hand_for(None, dm=True).by.endswith("in a DM")
+        assert desk_verbs.hand_for(None).trace["room"] == "unknown"
+        assert desk_verbs.may_append("notes/..md") is False
+        assert desk_verbs.may_append("notes/x.md") is True
+
+    @pytest.mark.asyncio
+    async def test_a_body_handed_a_reader_has_no_pen(self, mock_message, tmp_path):
+        import desk_verbs
+
+        (tmp_path / "commons").mkdir()
+        (tmp_path / "commons" / "the-commons.md").write_text("# c\n", encoding="utf-8")
+        intents = Mock()
+        intents.message_content = True
+        with patch("discord.Client.__init__", return_value=None):
+            bot = Faebot(intents, diary=DiaryReader(tmp_path))
+            bot._connection = Mock()
+            bot._connection.user = Mock(id=12345, display_name="faebot")
+            bot._connection.user.mentioned_in = Mock(return_value=False)
+            bot.fdb = Mock()
+            bot.fdb.save_conversation = AsyncMock(return_value=True)
+        conversation_id = self._room(bot, mock_message)
+        prompts, rows = await self._drive(
+            bot,
+            mock_message,
+            conversation_id,
+            [
+                self._answer(
+                    calls=[
+                        self._call("append", path="commons/the-commons.md", lines="x")
+                    ]
+                ),
+                self._answer("no pen here."),
+            ],
+        )
+        # the pen isn't on her wire at all, so the call is a verb this desk
+        # doesn't have — the dispatcher's word, and nothing landed
+        assert prompts[0].tools == desk_verbs.READING_TOOLS
+        assert prompts[1].turns[1]["content"] == "no such verb at this desk: append"
+        assert (tmp_path / "commons" / "the-commons.md").read_text(
+            encoding="utf-8"
+        ) == "# c\n"

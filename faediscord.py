@@ -32,7 +32,8 @@ from faebot_core.cognition.verbs import (
     tool_result_message,
     user_message,
 )
-from faebot_core.diary import DIARY_PATH_VARIABLE, DiaryReader
+from faebot_core.diary import DIARY_PATH_VARIABLE, Diary, DiaryReader
+from faebot_core.memory import writing
 
 import desk_verbs
 from dataclasses import dataclass, field
@@ -87,6 +88,7 @@ class Turn:
     calls: int = 0
     opened: Dict[str, str] = field(default_factory=dict)
     mutters: List[str] = field(default_factory=list)
+    written: List[Tuple[str, str]] = field(default_factory=list)  # (page, verb)
     passed: bool = False
     why: str = ""
     elapsed: float = 0.0
@@ -101,10 +103,17 @@ class Faebot(discord.Client):
         self.model: str = model
         self.debug_prompts = env == "dev"  # Store debug state in the bot instance
         self.fdb = FaebotDatabase()
-        # faebot's diary, read-only by type: the frame she wakes to, the
-        # anchor files that ride with her, the roster of everything else.
-        # Required — a body without its diary has no frame at all.
-        self.diary = diary if diary is not None else DiaryReader.from_environment()
+        # faebot's diary: the frame she wakes to, the anchor files that ride
+        # with her, the roster of everything else — and, since her pen
+        # (append, write), the door her writes land through. A reader handed
+        # in by a test is a body without a pen; the real body opens the
+        # writing door. Required — a body without its diary has no frame.
+        self.diary = diary if diary is not None else Diary.from_environment()
+        # The verbs on her wire: with a pen, the four; handed a reader, the
+        # two that read — a body never advertises a hand it doesn't have.
+        self.verbs, self.tools = desk_verbs.offered(
+            has_pen=isinstance(self.diary, Diary)
+        )
         # When each room last heard a message (monotonic seconds), so the
         # freshest rooms are the ones in earshot.
         self.last_heard: Dict[str, float] = {}
@@ -1153,7 +1162,7 @@ class Faebot(discord.Client):
         prompt = generation.Prompt(
             system=desk.frame,
             user=desk.furniture() + f"[{current_time}] {self.user.display_name}:",
-            tools=desk_verbs.TOOLS,
+            tools=self.tools,
         )
 
         # The typing indicator runs while faebot thinks — including when the
@@ -1197,6 +1206,7 @@ class Faebot(discord.Client):
             meta["calls"] = turn.calls
             meta["opened"] = list(turn.opened)
             meta["mutters"] = len(turn.mutters)
+            meta["written"] = [page for page, _ in turn.written]
             meta["turn_elapsed"] = round(turn.elapsed, 1)
 
         # Her quiet, three ways, one mark. The pass verb (her ruling: a why
@@ -1355,6 +1365,7 @@ class Faebot(discord.Client):
         failed (logged and captured by `_generate_reply`)."""
         opened: Dict[str, str] = {}
         mutters: List[str] = []
+        written: List[Tuple[str, str]] = []
         calls_made = 0
         elapsed = 0.0
         budget_said = False
@@ -1367,7 +1378,20 @@ class Faebot(discord.Client):
             # kept for the record; it never reaches the wire (the turn ends)
             return Ended(why)
 
-        handlers: Dict[str, Callable[..., str]] = {"open": open_page, "pass": pass_}
+        def append_lines(path: str, lines: str, why: str = "") -> str:
+            return self._verb_append(
+                path, lines, why, written, message, conversation_id
+            )
+
+        def write_page(path: str, text: str, why: str = "") -> str:
+            return self._verb_write(path, text, why, written, message, conversation_id)
+
+        handlers: Dict[str, Callable[..., str]] = {
+            "open": open_page,
+            "append": append_lines,
+            "write": write_page,
+            "pass": pass_,
+        }
         while True:
             completion = await self._generate_reply(prompt, message, conversation_id)
             if completion is None:
@@ -1375,7 +1399,9 @@ class Faebot(discord.Client):
             elapsed += completion.elapsed
             calls = completion.calls
             if not calls:
-                return Turn(completion, calls_made, opened, mutters, elapsed=elapsed)
+                return Turn(
+                    completion, calls_made, opened, mutters, written, elapsed=elapsed
+                )
             passing = any(call.verb == desk_verbs.PASS.name for call in calls)
             if budget_said and not passing:
                 # the desk said "words or pass" and she called on: the
@@ -1424,7 +1450,7 @@ class Faebot(discord.Client):
             results = []
             # after the budget only pass is on offer, so only pass runs — a
             # pass that arrives with company is honored and the company told
-            on_offer = (desk_verbs.PASS,) if budget_said else desk_verbs.VERBS
+            on_offer = (desk_verbs.PASS,) if budget_said else self.verbs
             if budget_said and len(calls) > 1:
                 logging.info(
                     f"faebot passed with {len(calls) - 1} other call(s) beside it after "
@@ -1451,6 +1477,7 @@ class Faebot(discord.Client):
                         calls_made,
                         opened,
                         mutters,
+                        written,
                         passed=True,
                         why=outcome.result,
                         elapsed=elapsed,
@@ -1469,6 +1496,208 @@ class Faebot(discord.Client):
                         "here. Answer the room in words, or pass."
                     )
                 ).offering(desk_verbs.PASS_ONLY)
+
+    def _land(
+        self,
+        rel: str,
+        body: str,
+        verb: str,
+        why: str,
+        written: List[Tuple[str, str]],
+        message,
+        conversation_id,
+    ) -> str:
+        """Her pen's last steps — core's write floor, with this body's hand: one
+        commit under her name naming the body and the room, the trace row,
+        her `why` in the message. A row in her record either way; nothing in
+        the room. The floor refuses a dirty tree and nothing lands."""
+        if not isinstance(self.diary, Diary):
+            capture.record_faebot_write(
+                message.channel,
+                rel,
+                verb,
+                False,
+                reason="no pen",
+                conversation_id=conversation_id,
+            )
+            return "not written — this body has no pen connected; nothing landed"
+        dm = isinstance(message.channel, discord.DMChannel)
+        room = None if dm else getattr(message.channel, "name", None)
+        hand = desk_verbs.hand_for(room, dm=dm, why=why)
+        try:
+            sha = writing.land(self.diary, rel, body, verb, hand, self._clock)
+        except writing.DirtyTree:
+            logging.warning(
+                f"faebot's {verb} of {rel} refused: the diary tree is dirty"
+            )
+            capture.record_faebot_write(
+                message.channel,
+                rel,
+                verb,
+                False,
+                reason="dirty tree",
+                chars=len(body),
+                conversation_id=conversation_id,
+            )
+            return (
+                "not written — your diary has an unfinished change on disk, and "
+                "nothing lands on top of one. Nothing was changed."
+            )
+        except Exception as error:
+            # a fault under the floor (git, the disk, a misdeployed identity)
+            # still ends in a word to her and a row in her record — never a
+            # turn that dies with nothing said
+            logging.exception(f"faebot's {verb} of {rel} did not land")
+            capture.record_faebot_write(
+                message.channel,
+                rel,
+                verb,
+                False,
+                reason=f"land failed: {type(error).__name__}",
+                chars=len(body),
+                conversation_id=conversation_id,
+            )
+            return (
+                "not written — the write did not land; the machinery stumbled and "
+                "nothing was changed. Try again later, or leave it."
+            )
+        written.append((rel, verb))
+        logging.info(f"faebot {verb} {rel} — diary {sha[:7]}")
+        capture.record_faebot_write(
+            message.channel,
+            rel,
+            verb,
+            True,
+            commit=sha,
+            chars=len(body),
+            why=hand.why or None,
+            conversation_id=conversation_id,
+        )
+        said = (
+            "added — the lines are at the end of" if verb == "append" else "written —"
+        )
+        return f"{said} {rel} (commit {sha[:7]}). The room sees nothing of it."
+
+    def _refused(
+        self,
+        rel_or_path: str,
+        verb: str,
+        reason: str,
+        word: str,
+        message,
+        conversation_id,
+    ) -> str:
+        logging.info(f"faebot's {verb} of {rel_or_path} refused: {reason}")
+        capture.record_faebot_write(
+            message.channel,
+            rel_or_path,
+            verb,
+            False,
+            reason=reason,
+            conversation_id=conversation_id,
+        )
+        return word
+
+    def _verb_append(
+        self,
+        path: str,
+        lines: str,
+        why: str,
+        written: List[Tuple[str, str]],
+        message,
+        conversation_id,
+    ) -> str:
+        """The append verb: her lines at the end of the commons or a notes/
+        page, after one blank line, landed at once. Other pages are said as
+        not this verb's — a draft in notes/ or a commons block is the way."""
+        rel = desk_path(path)
+        if rel is None:
+            return self._refused(
+                path,
+                "append",
+                "not a path",
+                f"not a path this desk knows: {path} — commons/the-commons.md, or notes/<page>.md",
+                message,
+                conversation_id,
+            )
+        if not desk_verbs.may_append(rel):
+            return self._refused(
+                rel,
+                "append",
+                "not this verb's page",
+                f"not a page this verb writes: {rel} — the commons and notes/ are; "
+                "beings/, spaces/ and the rest go by a draft in notes/ or a block on the commons",
+                message,
+                conversation_id,
+            )
+        if not self.diary.has_page(rel):
+            return self._refused(
+                rel,
+                "append",
+                "no such page",
+                f"{rel} isn't in your diary yet — write it as a new page under notes/, or check the name",
+                message,
+                conversation_id,
+            )
+        added = lines.strip("\n")
+        if not added.strip():
+            return self._refused(
+                rel,
+                "append",
+                "nothing to add",
+                "nothing to add — the lines were empty",
+                message,
+                conversation_id,
+            )
+        existing = self.diary.read_page(rel).rstrip("\n")
+        body = f"{existing}\n\n{added}\n"
+        return self._land(rel, body, "append", why, written, message, conversation_id)
+
+    def _verb_write(
+        self,
+        path: str,
+        text: str,
+        why: str,
+        written: List[Tuple[str, str]],
+        message,
+        conversation_id,
+    ) -> str:
+        """The write verb: a new page under notes/, landed at once. A page that
+        exists is refused — open it and append; a name of the wrong shape is
+        said as such."""
+        rel = desk_path(path)
+        if rel is None or not desk_verbs.may_found(rel):
+            return self._refused(
+                path,
+                "write",
+                "not a new notes/ page",
+                f"not a page this verb founds: {path} — a new page is notes/<name>.md, "
+                "lowercase, words and hyphens",
+                message,
+                conversation_id,
+            )
+        if self.diary.has_page(rel):
+            return self._refused(
+                rel,
+                "write",
+                "page exists",
+                f"{rel} already exists — open it and call append to add to it; nothing was written",
+                message,
+                conversation_id,
+            )
+        body = text.strip("\n")
+        if not body.strip():
+            return self._refused(
+                rel,
+                "write",
+                "nothing to write",
+                "nothing to write — the text was empty",
+                message,
+                conversation_id,
+            )
+        return self._land(
+            rel, body + "\n", "write", why, written, message, conversation_id
+        )
 
     def _verb_open(
         self, path: str, opened: Dict[str, str], message, conversation_id
