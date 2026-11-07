@@ -1451,6 +1451,13 @@ class Faebot(discord.Client):
             # after the budget only pass is on offer, so only pass runs — a
             # pass that arrives with company is honored and the company told
             on_offer = (desk_verbs.PASS,) if budget_said else self.verbs
+            # after the budget the rest of her verbs are withdrawn, not gone —
+            # a late call to one is told the desk stopped, never "no such verb"
+            withdrawn = (
+                [verb.name for verb in self.verbs if verb is not desk_verbs.PASS]
+                if budget_said
+                else []
+            )
             if budget_said and len(calls) > 1:
                 logging.info(
                     f"faebot passed with {len(calls) - 1} other call(s) beside it after "
@@ -1462,6 +1469,7 @@ class Faebot(discord.Client):
                 handlers,
                 cut=cut,
                 announce=lambda call: logging.info(f"faebot calls {call.shown()}"),
+                withdrawn=withdrawn,
             ):
                 logging.info(
                     "  ← "

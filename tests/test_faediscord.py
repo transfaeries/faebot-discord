@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 import pytest
 from datetime import datetime, timedelta, timezone
@@ -2222,10 +2223,12 @@ class TestTheTurn:
 
     @pytest.mark.asyncio
     async def test_after_the_budget_her_pass_is_honored_even_with_company(
-        self, faebot, mock_message
+        self, faebot, mock_message, caplog
     ):
-        from faebot_core.cognition.verbs import MAX_CALLS_PER_TURN
+        from faebot_core.cognition.verbs import MAX_CALLS_PER_TURN, WITHDRAWN_RESULT
         import desk_verbs
+
+        caplog.set_level(logging.INFO)
 
         conversation_id = self._room(faebot, mock_message)
         answers = [
@@ -2251,6 +2254,11 @@ class TestTheTurn:
         # open recorded the page; the rest were told it was open already)
         assert rows["opens"].call_count == 1
         assert prompts[-1].tools == desk_verbs.PASS_ONLY
+        # and the company was told the desk stopped — never "no such verb",
+        # which to a body with a pen reads as the pen being gone
+        words = WITHDRAWN_RESULT.format(verb="open")[:160]
+        assert any(words in record.message for record in caplog.records)
+        assert not any("no such verb" in record.message for record in caplog.records)
 
     @pytest.mark.asyncio
     async def test_the_old_sentinel_beside_a_call_is_a_mutter_and_counted(
